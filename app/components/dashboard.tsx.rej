@@ -1,0 +1,7 @@
+*** /dev/null
+--- /dev/null
+***************
+*** 745
+- rawJson = rawJson.substring(0, 10000) + "... (메시지 크기 초과로 잘림)`)\;
+--- 745 -----
++ rawJson = rawJson.substring(0, 10000) + "... (메시지 크기 초과로 잘림)"\;

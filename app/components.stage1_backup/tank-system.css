@@ -1,0 +1,47 @@
+@keyframes pulse {
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}
+
+.filling-animation {
+  animation: pulse 2s infinite;
+}
+
+.tank-water {
+  transition: clip-path 1.5s ease-in-out;
+}
+
+.legend-container {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  background-color: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.legend-color {
+  width: 15px;
+  height: 15px;
+  margin-right: 10px;
+}
+
+.legend-text {
+  font-size: 12px;
+  color: #4b5563;
+} 

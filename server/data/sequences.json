@@ -1,0 +1,114 @@
+[
+  {
+    "name": "t1",
+    "operation_mode": 12,
+    "repeats": 1,
+    "process": [
+      0,
+      0,
+      0,
+      0,
+      10,
+      12
+    ],
+    "selectedPumps": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "wait_time": 5
+  },
+  {
+    "name": "t2",
+    "operation_mode": 22,
+    "repeats": 1,
+    "process": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      10,
+      5,
+      1,
+      10,
+      5,
+      0
+    ],
+    "selectedPumps": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "individualRepeats": {
+      "4": 1,
+      "5": 0
+    }
+  },
+  {
+    "name": "t3",
+    "operation_mode": 32,
+    "repeats": 1,
+    "process": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      10,
+      5,
+      10,
+      5,
+      10,
+      10
+    ],
+    "selectedPumps": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ],
+    "individualRepeats": {
+      "4": 1,
+      "5": 0
+    }
+  },
+  {
+    "name": "테스트00",
+    "operation_mode": 12,
+    "repeats": 1,
+    "process": [
+      0,
+      0,
+      0,
+      0,
+      10,
+      10
+    ],
+    "selectedPumps": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ],
+    "wait_time": 5
+  }
+]

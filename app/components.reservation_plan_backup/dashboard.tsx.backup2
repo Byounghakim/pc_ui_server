@@ -1,0 +1,2957 @@
+"use client"
+
+import dynamic from 'next/dynamic'
+import { useState, useEffect, useRef, useCallback } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import MqttClient from "@/lib/mqtt-client"
+import {
+  getPumpCommandTopic,
+  getPumpStateTopic,
+  getTankLevelTopic,
+  getPumpOverallStateTopic,
+  getAllSubscriptionTopics,
+  parseTankLevelMessage,
+  parseValveStateMessage,
+  parsePumpStateMessage,
+  VALVE_STATE_TOPIC,
+  VALVE_INPUT_TOPIC,
+  PROCESS_PROGRESS_TOPIC,
+  ERROR_TOPIC,
+  EXTRACTION_OUTPUT_TOPIC,
+  EXTRACTION_INPUT_TOPIC,
+  Tank
+} from "@/lib/mqtt-topics"
+import { Switch } from "@/components/ui/switch"
+import { Slider } from "@/components/ui/slider"
+import { PumpSequence, TankSystemData, WorkLog } from '../types'
+import * as apiService from '../services/api'
+import { ChevronDown } from 'lucide-react'
+import workLogService from '../services/work-log-service'
+import WorkLogBook from './work-log/work-log-book'
+import AutomationProcess from './AutomationProcess'; // 자동화 공정 컴포넌트 import
+import { v4 as uuidv4 } from 'uuid'
+import { useToast } from "@/components/ui/use-toast"
+
+// 카메라 구독 및 명령 토픽 형식
+const CAM_COMMAND_TOPIC = "extwork/cam%d/command";
+const CAM_STATE_TOPIC = "extwork/cam%d/state";
+
+// 카메라 토픽 생성 함수
+const getCamCommandTopic = (camNumber: number): string => {
+  return CAM_COMMAND_TOPIC.replace("%d", camNumber.toString());
+};
+
+const getCamStateTopic = (camNumber: number): string => {
+  return CAM_STATE_TOPIC.replace("%d", camNumber.toString());
+};
+
+// TankSystem 컴포넌트를 동적으로 임포트
+const TankSystem = dynamic(
+  () => import('@/app/components/tank-system'),
+  { 
+    ssr: false,
+    loading: () => <div>탱크 시스템 로딩 중...</div>
+  }
+)
+
+// 탱크 시스템 데이터 interface 확장
+interface TankSystemDataWithMessages extends TankSystemData {
+  pumpStates?: Record<number, string>;
+}
+
+// PumpSequence 인터페이스를 PumpSequenceType으로 변경
+interface PumpSequenceType {
+  name: string;
+  operation_mode: number;
+  repeats: number;
+  process: number[];
+  selectedPumps: boolean[];
+  wait_time?: number;
+}
+
+// 서버에 상태 저장
+const saveStateToServer = async (state: any) => {
+  try {
+    // 서버에 저장
+    const serverSaved = await apiService.saveStateToServer(state);
+    
+    // 로컬 스토리지에도 백업으로 저장
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('tankSystemState', JSON.stringify(state));
+        console.log('상태가 로컬 스토리지에 백업되었습니다.');
+      } catch (error) {
+        console.error('로컬 스토리지에 상태 백업 중 오류:', error);
+      }
+    }
+    
+    return serverSaved;
+  } catch (error) {
+    console.error('상태 저장 중 오류:', error);
+    // 서버 저장 실패 시 로컬 스토리지에만 저장
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem('tankSystemState', JSON.stringify(state));
+      console.log('상태가 로컬 스토리지에 저장되었습니다.');
+      return true;
+      } catch (localError) {
+        console.error('로컬 스토리지에 상태 저장 중 오류:', localError);
+    }
+  }
+  return false;
+  }
+};
+
+// 서버에서 상태 불러오기
+const loadStateFromServer = async () => {
+  try {
+    // 서버에서 불러오기 시도
+    const serverState = await apiService.loadStateFromServer();
+    if (serverState) {
+      console.log('서버에서 상태를 불러왔습니다.');
+      return serverState;
+    }
+  } catch (error) {
+    console.error('서버에서 상태 불러오기 중 오류:', error);
+  }
+  
+  // 서버에서 불러오기 실패 시 로컬 스토리지에서 시도
+  if (typeof window !== 'undefined') {
+    try {
+      const savedState = localStorage.getItem('tankSystemState');
+      if (savedState) {
+        console.log('로컬 스토리지에서 상태를 불러왔습니다.');
+        return JSON.parse(savedState);
+      }
+    } catch (error) {
+      console.error('로컬 스토리지에서 상태 불러오기 중 오류:', error);
+    }
+  }
+  
+  return null;
+};
+
+// 서버에 시퀀스 저장
+const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean> => {
+  try {
+    console.log('[시퀀스 저장] 서버에 시퀀스 저장 시작', sequences.length, '개 시퀀스');
+    
+    // 유효한 시퀀스만 필터링
+    const validSequences = sequences.filter(seq => {
+      // 필수 필드 확인
+      if (typeof seq !== 'object' || seq === null) return false;
+      if (typeof seq.operation_mode !== 'number') return false;
+      if (!Array.isArray(seq.process)) return false;
+      
+      // name 필드가 없으면 제외
+      if (!seq.name || typeof seq.name !== 'string' || seq.name.trim() === '') return false;
+      
+      return true;
+    });
+    
+    if (validSequences.length === 0) {
+      console.warn('[시퀀스 저장] 저장할 유효한 시퀀스가 없음');
+      return false;
+    }
+    
+    console.log(`[시퀀스 저장] ${validSequences.length}개의 유효한 시퀀스 저장 준비`);
+    
+    // API URL 설정 (중요! 환경변수 값 로깅하여 올바른지 확인)
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+    console.log('[시퀀스 저장] API URL:', API_URL || '비어있음'); // URL이 비어있는지 확인
+    
+    const url = `${API_URL}/api/sequences`;
+    console.log('[시퀀스 저장] 완전한 URL:', url);
+    
+    // API 호출 - timeout 추가
+    console.log('[시퀀스 저장] API 호출 시작 (POST)');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 타임아웃
+    
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ sequences: validSequences }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId); // 타임아웃 취소
+      
+      console.log('[시퀀스 저장] API 응답 상태:', response.status, response.statusText);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[시퀀스 저장] 서버 응답 오류:', errorText);
+        throw new Error(`서버 오류: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('[시퀀스 저장] 서버 시퀀스 저장 성공:', data.success);
+      
+      // 로컬에도 캐시로 저장
+      saveSequencesToLocalStorage(sequences);
+      return true;
+    } catch (fetchError) {
+      clearTimeout(timeoutId); // 타임아웃 취소
+      throw fetchError; // 오류 전파
+    }
+  } catch (error) {
+    console.error('[시퀀스 저장] 서버 시퀀스 저장 중 오류:', error);
+    
+    // 오류 발생 시 로컬에 백업으로 저장
+    console.log('[시퀀스 저장] 로컬에 시퀀스 백업 저장 (오류 발생)');
+    saveSequencesToLocalStorage(sequences);
+    return false;
+  }
+};
+
+// 서버에서 시퀀스 불러오기
+const loadSequencesFromServer = async (): Promise<PumpSequence[] | null> => {
+  try {
+    console.log('서버에서 시퀀스 불러오기 시작');
+    
+    // API URL 설정 (중요! 환경변수 값 로깅하여 올바른지 확인)
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+    console.log('[시퀀스 로드] API URL:', API_URL || '비어있음'); // URL이 비어있는지 확인
+    
+    const url = `${API_URL}/api/sequences`;
+    console.log('[시퀀스 로드] 완전한 URL:', url);
+    
+    // API 호출 - timeout 추가
+    console.log('[시퀀스 로드] API 호출 시작');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 타임아웃
+    
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
+        },
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId); // 타임아웃 취소
+      
+      console.log('[시퀀스 로드] API 응답 상태:', response.status, response.statusText);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[시퀀스 로드] 서버 응답 오류:', errorText);
+        throw new Error(`서버 오류: ${response.status} ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('[시퀀스 로드] 서버 시퀀스 불러오기 성공:', Object.keys(data));
+      
+      // 시퀀스 배열 추출
+      let serverSequences: PumpSequence[] = [];
+      
+      if (data && data.sequences && Array.isArray(data.sequences)) {
+        serverSequences = data.sequences;
+        console.log(`[시퀀스 로드] 서버에서 ${serverSequences.length}개 시퀀스 추출`);
+      } else if (data && Array.isArray(data)) {
+        serverSequences = data;
+        console.log(`[시퀀스 로드] 서버에서 ${serverSequences.length}개 시퀀스 추출 (배열 형식)`);
+      } else {
+        console.warn('[시퀀스 로드] 서버 응답에 시퀀스 배열이 없음');
+        console.log('응답 데이터 구조:', JSON.stringify(data).substring(0, 200) + '...');
+      }
+      
+      // 유효성 검사
+      serverSequences = serverSequences.filter(seq => {
+        // 필수 필드 확인
+        if (typeof seq !== 'object' || seq === null) return false;
+        if (typeof seq.operation_mode !== 'number') return false;
+        if (!Array.isArray(seq.process)) return false;
+        
+        // name 필드가 없으면 "이름 없음"으로 설정
+        if (!seq.name) seq.name = "이름 없음";
+        
+        // 필수 필드 기본값 설정
+        if (typeof seq.repeats !== 'number') seq.repeats = 1;
+        
+        return true;
+      });
+      
+      if (serverSequences.length > 0) {
+        // 로컬에도 캐시로 저장
+        saveSequencesToLocalStorage(serverSequences);
+        return serverSequences;
+      }
+      
+      // 서버 데이터가 없는 경우 로컬 데이터 사용
+      const localSequences = loadSequencesFromLocalStorage();
+      if (localSequences.length > 0) {
+        console.log('[시퀀스 로드] 로컬 시퀀스 데이터 사용');
+        return localSequences;
+      }
+      
+      return [];
+    } catch (fetchError) {
+      clearTimeout(timeoutId); // 타임아웃 취소
+      throw fetchError; // 오류 전파
+    }
+  } catch (error) {
+    console.error('[시퀀스 로드] 서버 시퀀스 불러오기 중 오류:', error);
+    
+    // 오류 발생 시 로컬 데이터 사용
+    const localSequences = loadSequencesFromLocalStorage();
+    if (localSequences.length > 0) {
+      console.log('[시퀀스 로드] 로컬 시퀀스 데이터 사용 (오류 발생)');
+      return localSequences;
+    }
+    
+    return [];
+  }
+};
+
+// 로컬 스토리지에 시퀀스 저장
+const saveSequencesToLocalStorage = (sequences: PumpSequence[]) => {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem('savedSequences', JSON.stringify(sequences));
+      return true;
+    } catch (error) {
+      console.error('로컬 스토리지에 시퀀스 저장 중 오류:', error);
+      return false;
+    }
+  }
+  return false;
+};
+
+// 로컬 스토리지에서 시퀀스 불러오기
+const loadSequencesFromLocalStorage = (): PumpSequence[] => {
+  if (typeof window !== 'undefined') {
+    try {
+      const savedSequences = localStorage.getItem('savedSequences');
+      if (savedSequences) {
+        try {
+          const parsedSequences = JSON.parse(savedSequences);
+          
+          // 유효성 검사: 배열인지 확인
+          if (!Array.isArray(parsedSequences)) {
+            console.error('로컬 스토리지의 시퀀스 데이터가 배열이 아닙니다.');
+            localStorage.removeItem('savedSequences'); // 잘못된 데이터 삭제
+            return [];
+          }
+          
+          // 각 시퀀스 항목 유효성 검사
+          const validSequences = parsedSequences.filter(seq => {
+            // 필수 필드 확인
+            if (typeof seq !== 'object' || seq === null) return false;
+            if (typeof seq.operation_mode !== 'number') return false;
+            if (typeof seq.repeats !== 'number') return false;
+            if (!Array.isArray(seq.process)) return false;
+            
+            // 선택적 필드 타입 검사 (존재하는 경우)
+            if (seq.name !== undefined && typeof seq.name !== 'string') return false;
+            if (seq.wait_time !== undefined && typeof seq.wait_time !== 'number') return false;
+            if (seq.selectedPumps !== undefined && !Array.isArray(seq.selectedPumps)) return false;
+            
+            return true;
+          });
+          
+          // 필터링된 시퀀스 확인
+          if (validSequences.length < parsedSequences.length) {
+            console.warn(`${parsedSequences.length - validSequences.length}개의 잘못된 시퀀스 데이터가 필터링되었습니다.`);
+            // 유효한 시퀀스만 다시 저장
+            localStorage.setItem('savedSequences', JSON.stringify(validSequences));
+          }
+          
+          return validSequences;
+        } catch (parseError) {
+          console.error('로컬 스토리지의 시퀀스 JSON 파싱 오류:', parseError);
+          localStorage.removeItem('savedSequences'); // 손상된 데이터 삭제
+          return [];
+        }
+      }
+    } catch (error) {
+      console.error('로컬 스토리지에서 시퀀스 불러오기 중 오류:', error);
+    }
+  }
+  return [];
+};
+
+export default function Dashboard() {
+  const { toast } = useToast();
+  const [topic, setTopic] = useState(VALVE_INPUT_TOPIC)
+  const [message, setMessage] = useState("")
+  const [mqttStatus, setMqttStatus] = useState("연결 끊김")
+  const [progress, setProgress] = useState(0)
+  const [mqttClient, setMqttClient] = useState<MqttClient | null>(null)
+  const [pumpModalOpen, setPumpModalOpen] = useState(false)
+  const [selectedPump, setSelectedPump] = useState<number | null>(null)
+  const [camStates, setCamStates] = useState<Array<"ON" | "OFF">>(Array(5).fill("OFF"))
+  const [lightStates, setLightStates] = useState<Array<"ON" | "OFF">>(Array(5).fill("OFF"))
+  const [camStateMessages, setCamStateMessages] = useState<{[key: number]: string}>({})
+  const [tankData, setTankData] = useState<TankSystemDataWithMessages>({
+    mainTank: {
+      level: 0,
+      status: 'empty'
+    },
+    tanks: Array(6).fill(0).map((_, i) => ({
+      id: i + 1,
+      level: 0,
+      status: 'empty',
+      pumpStatus: 'OFF',
+      inverter: i + 1
+    })),
+    valveState: "0000"
+  })
+  // 버튼 스타일 관리를 위한 상태 추가
+  const [currentValveState, setCurrentValveState] = useState<string>("");
+  const [searchTopic, setSearchTopic] = useState("")
+  const [progressData, setProgressData] = useState<string>("데이터 없음")
+  const [progressStatus, setProgressStatus] = useState<"connected" | "disconnected">("disconnected")
+  const [lastErrors, setLastErrors] = useState<string[]>([])
+  
+  // 추출 진행 메시지를 저장할 상태
+  const [progressMessages, setProgressMessages] = useState<Array<{timestamp: number, message: string, rawJson?: string | null}>>([])
+  
+  // 펌프 overallstate 메시지를 저장할 상태 추가
+  const [pumpStateMessages, setPumpStateMessages] = useState<Record<number, string>>({});
+  
+  // 큐 상태
+  const [queueStatus, setQueueStatus] = useState<any>(null);
+  
+  // JSON 미리보기
+  const [previewJson, setPreviewJson] = useState<string>("");
+
+  // 첫 렌더링 여부 추적
+  const isFirstRender = useRef(true);
+
+  // 카메라 스트리밍 상태 관리
+  const [streamingStates, setStreamingStates] = useState<Array<boolean>>([false, false, false, false, false]);
+
+  // 작업 로그북 관련 상태 추가
+  const [workLogs, setWorkLogs] = useState<WorkLog[]>([]);
+  const [currentWorkLogId, setCurrentWorkLogId] = useState<string | null>(null);
+
+  // 작업목록 버튼 상태 관리를 위한 상태
+  const [workInProgress, setWorkInProgress] = useState<Record<string, boolean>>({});
+
+  // 카메라 스트리밍 토글 함수
+  const toggleStreaming = (camNumber: number) => {
+    if (!mqttClient) return;
+    
+    const currentState = streamingStates[camNumber - 1];
+    const newState = !currentState;
+    
+    // 스트리밍 제어 명령 발행 (s0: 스트리밍 중지, s1: 스트리밍 시작)
+    const command = newState ? "s1" : "s0";
+    mqttClient.publish(getCamCommandTopic(camNumber), command);
+    
+    // UI 상태 업데이트
+    setStreamingStates(prev => {
+      const newStates = [...prev];
+      newStates[camNumber - 1] = newState;
+      return newStates;
+    });
+  };
+
+  // 카메라 라이트 토글 함수
+  const toggleLight = (camNumber: number) => {
+    if (!mqttClient) return;
+    
+    const currentState = lightStates[camNumber - 1];
+    const newState = currentState === "OFF" ? "ON" : "OFF";
+    
+    // ON/OFF에 따라 0 또는 1 발행
+    // OFF 상태일 때 스위치를 누르면 1을 발행해서 켜고, ON 상태일 때는 0을 발행해서 끔
+    const command = newState === "ON" ? "1" : "0";
+    mqttClient.publish(getCamCommandTopic(camNumber), command);
+  };
+
+  // 카메라 리셋 함수
+  const resetCamera = (camNumber: number) => {
+    if (!mqttClient) return;
+    mqttClient.publish(getCamCommandTopic(camNumber), "reset");
+  };
+
+  // 로컬 스토리지에서 이전 밸브 상태 로드
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        // 탱크 데이터 로드
+        const savedTankData = localStorage.getItem('tankData');
+        if (savedTankData) {
+          try {
+            setTankData(JSON.parse(savedTankData));
+          } catch (parseError) {
+            console.error('탱크 데이터 JSON 파싱 오류:', parseError);
+            // 잘못된 데이터 삭제
+            localStorage.removeItem('tankData');
+          }
+        }
+
+        // 밸브 상태 로드 (별도 저장된 경우)
+        const savedValveState = localStorage.getItem('valveState');
+        if (savedValveState) {
+          try {
+            const valveState = JSON.parse(savedValveState);
+            // valveState를 탱크 데이터에 적용하는 로직 (필요한 경우)
+          } catch (parseError) {
+            console.error('밸브 상태 JSON 파싱 오류:', parseError);
+            // 잘못된 데이터 삭제
+            localStorage.removeItem('valveState');
+          }
+        }
+      } catch (error) {
+        console.error('로컬 스토리지에서 데이터 로드 중 오류:', error);
+      }
+    }
+  }, []);
+
+  // 초기 데이터 로드
+  useEffect(() => {
+    // 서버에서 초기 상태 로드
+    const loadInitialServerState = async () => {
+      const serverState = await loadStateFromServer();
+      
+      if (serverState) {
+        console.log('서버에서 상태 로드 성공');
+        // 서버 상태로 탱크 데이터 업데이트
+        setTankData(serverState);
+      } else {
+        console.log('서버 상태 없음, 기본값 사용');
+      }
+    };
+    
+    loadInitialServerState();
+  }, []);
+
+  // 상태 변경 시 서버에 저장
+  useEffect(() => {
+    // 첫 렌더링 시에는 저장하지 않음
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    
+    // 상태 변경 시 서버에 저장
+    saveStateToServer(tankData);
+  }, [tankData]);
+
+  // MQTT 클라이언트 초기화
+  useEffect(() => {
+    console.log("MQTT 클라이언트 초기화 시작 - 현재 위치:", window.location.href);
+    
+    // MQTT 클라이언트 생성
+    const client = new MqttClient();
+
+    client.on('connect', () => {
+      console.log("MQTT 브로커에 연결 성공!");
+      setMqttStatus("연결됨");
+
+      // 모든 토픽 구독 (6개 인버터 기준)
+      const topics = getAllSubscriptionTopics(6);
+      console.log("구독할 토픽:", topics);
+      
+      topics.forEach(topic => {
+        client.subscribe(topic);
+        console.log(`토픽 구독: ${topic}`);
+      });
+      
+      // 밸브 상태 토픽 명시적 구독 추가
+      client.subscribe(VALVE_STATE_TOPIC);
+      console.log("밸브 상태 토픽 명시적 구독:", VALVE_STATE_TOPIC);
+      
+      // 진행 상황 토픽 명시적 구독
+      client.subscribe(PROCESS_PROGRESS_TOPIC);
+      console.log("진행 상황 토픽 구독:", PROCESS_PROGRESS_TOPIC);
+      
+      // 에러 토픽 구독
+      client.subscribe(ERROR_TOPIC);
+      console.log("에러 토픽 구독:", ERROR_TOPIC);
+      
+      // 메인 탱크 수위 토픽 명시적 구독 추가
+      client.subscribe('extwork/tankMain/level');
+      console.log("메인 탱크 수위 토픽 구독: extwork/tankMain/level");
+      
+      // 연결 즉시 밸브 상태 요청 메시지 전송
+      console.log("밸브 상태 요청 메시지 전송:", VALVE_INPUT_TOPIC);
+      // client.publish(VALVE_INPUT_TOPIC, "STATUS");
+
+      // 카메라 상태 토픽 구독 추가
+      for (let i = 1; i <= 5; i++) {
+        client.subscribe(getCamStateTopic(i));
+        console.log("카메라 상태 토픽 구독:", getCamStateTopic(i));
+      }
+    });
+
+    client.on('disconnect', () => {
+      console.log("MQTT 브로커와 연결이 끊겼습니다.");
+      setMqttStatus("연결 끊김");
+      setProgressStatus("disconnected");
+      
+      // 5초 후 자동 재연결 시도
+      setTimeout(() => {
+        console.log("MQTT 자동 재연결 시도...");
+        if (!client.isConnected()) {
+          client.connect();
+        }
+      }, 5000);
+    });
+
+    client.on('error', (error) => {
+      console.error("MQTT 오류 발생:", error);
+      // 오류 메시지 표시
+      setLastErrors(prev => {
+        const newErrors = [`MQTT 오류: ${error.message}`, ...prev].slice(0, 5);
+        return newErrors;
+      });
+    });
+
+    setMqttClient(client);
+    
+    // 자동으로 연결 시작
+    console.log("MQTT 브로커에 연결 시도...");
+    client.connect();  // 기본 URL과 인증 정보를 사용하도록 수정
+
+    // 컴포넌트 언마운트 시 연결 종료
+    return () => {
+      console.log("Dashboard 컴포넌트 언마운트, MQTT 연결 종료");
+      client.disconnect();
+    };
+  }, []);
+
+  // MQTT 메시지 수신 처리 - 별도의 useEffect로 분리
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    console.log("MQTT 메시지 핸들러 설정 중...");
+    
+    const handleMessage = (topic: string, message: Buffer) => {
+      const messageStr = message.toString();
+      console.log(`[MQTT 메시지 수신] 토픽: ${topic}, 메시지: ${messageStr}`);
+      
+      // 메인 탱크 수위 토픽 처리 - 최우선 처리
+      if (topic === 'extwork/tankMain/level') {
+        console.log(`[메인 탱크] 수위 메시지 수신: ${messageStr}`);
+        
+        // 시간 추가하여 표시 메시지 생성
+        const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+        const displayMessage = `${messageStr} (${timeStr})`;
+        
+        // 메인 탱크 메시지 저장 (본탱크 텍스트 박스용)
+        setTankData(prev => {
+          console.log('[메인 탱크] 메시지 업데이트:', displayMessage);
+          
+          const updatedData = {
+            ...prev,
+            mainTankMessage: displayMessage
+          };
+          
+          // 업데이트된 상태 로깅
+          console.log('[메인 탱크] 업데이트된 데이터:', JSON.stringify(updatedData));
+          
+          // 서버에 상태 저장
+          saveStateToServer(updatedData);
+          
+          return updatedData;
+        });
+        
+        // 진행 메시지에도 추가하여 로그에 남김
+        setProgressMessages(prev => {
+          const newMessage = {
+            timestamp: Date.now(),
+            message: `메인 탱크 수위 업데이트: ${messageStr}`,
+            rawJson: null
+          };
+          return [newMessage, ...prev].slice(0, 20);
+        });
+        
+        return;
+      }
+      
+      try {
+        // 토픽에 따른 처리
+        if (topic.match(/extwork\/inverter(\d+)\/state/)) {
+          const inverterId = Number.parseInt(topic.match(/extwork\/inverter(\d+)\/state/)![1]);
+          const pumpStatus = parsePumpStateMessage(messageStr);
+
+          // 인버터에 해당하는 탱크 업데이트 (1:1 매핑)
+          setTankData((prev) => {
+            // tanks가 undefined인 경우 기본값으로 빈 배열 사용
+            if (!prev || !prev.tanks) {
+              console.error('Tank data is undefined or missing tanks array', prev);
+              // 초기 상태를 적절히 생성
+              return prev || { 
+                tanks: [], 
+                mainTank: prev?.mainTank || { level: 0, lastUpdate: new Date().toISOString() }, 
+                valveState: prev?.valveState || 'unknown'
+              };
+            }
+            
+            const updatedTanks = prev.tanks.map((tank) => {
+              if (tank.id === inverterId) {  // id와 inverterId가 동일하게 매핑됨
+                return { ...tank, pumpStatus }
+              }
+              return tank
+            })
+
+            // 업데이트된 상태
+            const updatedState = { ...prev, tanks: updatedTanks }
+            
+            // 변경된 상태를 서버에 저장
+            saveStateToServer(updatedState)
+            
+            return updatedState
+          })
+          return
+        }
+
+        // 밸브 상태 토픽 처리 - extwork/valve/state
+        if (topic === VALVE_STATE_TOPIC) {
+          console.log(`밸브 상태 메시지 수신: ${messageStr}`);
+          
+          // 밸브 상태 파싱 및 업데이트
+          const valveInfo = parseValveStateMessage(messageStr);
+          
+          // 상태 로그 추가
+          setProgressMessages(prev => {
+            const newMessage = {
+              timestamp: Date.now(),
+              message: `밸브 상태 업데이트: ${messageStr} (밸브A: ${valveInfo.valveADesc || '알 수 없음'}, 밸브B: ${valveInfo.valveBDesc || '알 수 없음'})`,
+              rawJson: messageStr
+            };
+            return [newMessage, ...prev].slice(0, 20); // 로그 개수 20개로 증가
+          });
+          
+          return;
+        }
+        
+        // 추출 진행 상황 토픽 처리 (extwork/extraction/progress)
+        if (topic === PROCESS_PROGRESS_TOPIC) {
+          console.log(`추출 진행 상황 메시지 수신: ${messageStr}`);
+          
+          // 진행 상황 데이터 업데이트
+          setProgressData(messageStr);
+          setProgressStatus("connected");
+          
+          try {
+            // JSON 형식인 경우 파싱하여 저장
+            const jsonData = JSON.parse(messageStr);
+            
+            // 작업 완료 메시지 감지 시
+            if (jsonData.status === 'completed' || messageStr.includes('completed')) {
+              if (currentWorkLogId) {
+                workLogService.updateWorkLog(currentWorkLogId, {
+                  status: 'completed',
+                  endTime: new Date().toISOString(),
+                  errorDetails: '작업이 성공적으로 완료되었습니다.'
+                }).then(() => {
+                  loadWorkLogs();
+                  setCurrentWorkLogId(null);
+                });
+              }
+            }
+            
+            // 작업 중단 메시지 감지 시
+            if (jsonData.status === 'stopped' || messageStr.includes('stopped')) {
+              if (currentWorkLogId) {
+                workLogService.updateWorkLog(currentWorkLogId, {
+                  status: 'aborted',
+                  endTime: new Date().toISOString(),
+                  errorDetails: '작업이 중단되었습니다.'
+                }).then(() => {
+                  loadWorkLogs();
+                  setCurrentWorkLogId(null);
+                });
+              }
+            }
+            
+            // 오류 메시지 감지 시
+            if (jsonData.status === 'error' || messageStr.includes('error')) {
+              if (currentWorkLogId) {
+                workLogService.updateWorkLog(currentWorkLogId, {
+                  status: 'error',
+                  endTime: new Date().toISOString(),
+                  errorDetails: `오류 발생: ${jsonData.message || messageStr}`
+                }).then(() => {
+                  loadWorkLogs();
+                  setCurrentWorkLogId(null);
+                });
+              }
+            }
+            
+            const timestamp = Date.now();
+            let displayMessage = "";
+            
+            // JSON 데이터에서 메시지 추출
+            if (jsonData.message) {
+              displayMessage = jsonData.message;
+            } else if (jsonData.step) {
+              displayMessage = `단계 ${jsonData.step}: ${jsonData.description || '진행 중'}`;
+              
+              // 진행 정보 추출
+              let stepInfo = `S(${jsonData.current_step || 0}/${jsonData.total_steps || 0})`;
+              let elapsedTime = jsonData.elapsed_time ? formatTime(jsonData.elapsed_time) : "00:00";
+              let remainingTime = jsonData.remaining_time ? formatTime(jsonData.remaining_time) : "00:00";
+              let totalRemainingTime = jsonData.total_remaining_time ? formatTime(jsonData.total_remaining_time) : "00:00";
+              
+              // 진행 정보 업데이트
+              setProgressInfo({
+                step: stepInfo,
+                elapsedTime,
+                remainingTime,
+                totalRemainingTime
+              });
+              
+              // 탱크 데이터에도 진행 정보 추가
+              setTankData(prev => ({
+                ...prev,
+                progressInfo: {
+                  step: stepInfo,
+                  elapsedTime,
+                  remainingTime,
+                  totalRemainingTime
+                }
+              }));
+            } else {
+              displayMessage = `진행 상황 업데이트: ${messageStr}`;
+            }
+            
+            // 로그 추가
+            setProgressMessages(prev => {
+              const newMessage = {
+                timestamp,
+                message: displayMessage,
+                rawJson: messageStr
+              };
+              return [newMessage, ...prev].slice(0, 10);
+            });
+          } catch (error) {
+            // JSON이 아닌 일반 텍스트 메시지 처리
+            setProgressMessages(prev => {
+              const newMessage = {
+                timestamp: Date.now(),
+                message: messageStr,
+                rawJson: null
+              };
+              return [newMessage, ...prev].slice(0, 10);
+            });
+          }
+          
+          return;
+        }
+
+        // 에러 토픽 처리 (extwork/extraction/error)
+        if (topic === ERROR_TOPIC) {
+          console.log(`에러 메시지 수신: ${messageStr}`);
+          
+          // 에러 메시지 추가
+          setLastErrors(prev => {
+            const newErrors = [`${new Date().toLocaleTimeString()}: ${messageStr}`, ...prev].slice(0, 5);
+            return newErrors;
+          });
+          
+          // 작업 로그 오류 상태 업데이트
+          if (currentWorkLogId) {
+            workLogService.updateWorkLog(currentWorkLogId, {
+              status: 'error',
+              endTime: new Date().toISOString(),
+              errorDetails: `오류 발생: ${messageStr}`
+            }).then(() => {
+              loadWorkLogs();
+              setCurrentWorkLogId(null);
+            });
+          }
+          
+          return;
+        }
+
+        // 탱크 수위 토픽 처리 - extwork/inverter%d/tank%d_level 형식
+        const tankLevelMatch = topic.match(/extwork\/inverter(\d+)\/tank(\d+)_level/)
+        if (tankLevelMatch) {
+          const inverterId = Number.parseInt(tankLevelMatch[1])
+          const tankId = Number.parseInt(tankLevelMatch[2])
+          
+              console.log(`탱크 수위 메시지 수신 - 인버터: ${inverterId}, 탱크: ${tankId}, 메시지: ${messageStr}`)
+          
+          // 시간 추가하여 표시 메시지 생성
+          const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+          const displayMessage = `${messageStr} (${timeStr})`;
+      
+          // 중요: tank_level 메시지는 탱크 메시지로 저장 (펌프 태그가 아님)
+      setTankData(prev => {
+            // 탱크 메시지 업데이트
+            return {
+              ...prev,
+              tankMessages: {
+                ...(prev.tankMessages || {}),
+                [tankId]: displayMessage
+              }
+            };
+          });
+          
+          return
+        }
+
+        // 메인 탱크 수위 토픽 처리 - extwork/tankMain/level 형식
+        if (topic === 'extwork/tankMain/level') {
+          console.log(`메인 탱크 수위 메시지 수신: ${messageStr}`)
+          
+          // 시간 추가하여 표시 메시지 생성
+          const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+          const displayMessage = `${messageStr} (${timeStr})`;
+          
+          // 메인 탱크 메시지 저장 (본탱크 텍스트 박스용)
+          setTankData(prev => {
+            console.log('메인 탱크 메시지 업데이트:', displayMessage);
+            // 디버깅을 위한 이전 상태 로깅 추가
+            console.log('이전 탱크 데이터:', JSON.stringify(prev));
+            
+            const updatedData = {
+              ...prev,
+              mainTankMessage: displayMessage
+            };
+            
+            // 업데이트된 상태 로깅
+            console.log('업데이트된 탱크 데이터:', JSON.stringify(updatedData));
+            return updatedData;
+          });
+          
+          // 진행 메시지에도 추가하여 로그에 남김
+          setProgressMessages(prev => {
+            const newMessage = {
+              timestamp: Date.now(),
+              message: `메인 탱크 수위 업데이트: ${messageStr}`,
+              rawJson: null
+            };
+            return [newMessage, ...prev].slice(0, 20);
+          });
+          
+          return;
+        }
+
+        // 펌프 전체 상태 토픽 처리
+        const overallStateMatch = topic.match(/extwork\/inverter(\d+)\/overallstate/)
+        if (overallStateMatch) {
+          const inverterId = Number.parseInt(overallStateMatch[1])
+              console.log(`인버터 ${inverterId}의 전체 상태 업데이트:`, messageStr)
+          
+          // 메인 탱크 상태 정보가 포함되어 있을 경우
+              if (messageStr.includes("main") || messageStr.includes("본탱크")) {
+            let status: "empty" | "filling" | "full" = "empty"
+            let level = 0
+            
+                if (messageStr.includes("full") || messageStr.includes("가득")) {
+              status = "full"
+              level = 100
+                } else if (messageStr.includes("filling") || messageStr.includes("채워")) {
+              status = "filling"
+              level = 50
+            }
+            
+                // 메인 탱크 상태를 업데이트 (이 부분은 유지하되, 명확한 메인 탱크 메시지일 때만 적용)
+                console.log("메인 탱크 상태 변경:", status, level);
+                
+                // 상태 메시지에 "본탱크" 또는 "main"이 직접적으로 포함된 경우에만 상태 변경
+                if (messageStr.includes("본탱크") || messageStr.includes("main")) {
+          setTankData(prev => ({
+            ...prev,
+            mainTank: {
+              status,
+              level
+            }
+          }))
+              }
+        }
+        
+            // overallstate 메시지는 펌프 태그에 표시
+        setPumpStateMessages(prev => ({
+          ...prev,
+              [inverterId]: messageStr
+        }));
+        
+        return
+      }
+
+        // 카메라 상태 토픽 처리
+        const camStateMatch = topic.match(/extwork\/cam(\d+)\/state/)
+        if (camStateMatch) {
+          const camNumber = parseInt(camStateMatch[1])
+          if (camNumber >= 1 && camNumber <= 5) {
+            // Flash ON/OFF 메시지 처리
+            let camStatus: "ON" | "OFF" = "OFF";
+            
+            // 메시지가 "Flash ON" 또는 "Flash OFF"인 경우 처리
+            if (messageStr.includes("Flash ON")) {
+              camStatus = "ON";
+              setLightStates(prev => {
+                const newStates = [...prev];
+                newStates[camNumber - 1] = "ON";
+                return newStates;
+              });
+            } else if (messageStr.includes("Flash OFF")) {
+              camStatus = "OFF";
+              setLightStates(prev => {
+                const newStates = [...prev];
+                newStates[camNumber - 1] = "OFF";
+                return newStates;
+              });
+            } else {
+              // 기존 카메라 상태 처리 로직 유지
+              camStatus = messageStr === "1" ? "ON" : "OFF";
+              setCamStates(prev => {
+                const newStates = [...prev];
+                newStates[camNumber - 1] = camStatus;
+                return newStates;
+              });
+            }
+            
+            // 상태 메시지 저장
+            setCamStateMessages(prev => ({
+              ...prev,
+              [camNumber]: messageStr
+            }));
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('MQTT 메시지 처리 오류:', error);
+      }
+      
+      // 추출 명령 응답 처리 (extwork/extraction/output)
+      if (topic === EXTRACTION_OUTPUT_TOPIC) {
+        console.log(`추출 명령 응답 수신: ${messageStr}`);
+        
+        try {
+          // 작업목록 상태 업데이트
+          if (messageStr.includes("JSON 명령이 성공적으로 처리되었습니다.")) {
+            // 추출 성공 시 해당 작업목록 진행중 상태로 변경
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              setWorkInProgress(prev => ({
+                ...prev,
+                [currentRunningSequence]: true
+              }));
+            }
+          } else if (messageStr.includes("공정 종료")) {
+            // 공정 종료 시 작업목록 상태 초기화
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              setWorkInProgress(prev => ({
+                ...prev,
+                [currentRunningSequence]: false
+              }));
+              localStorage.removeItem('currentRunningSequence');
+            }
+          }
+          
+          // 메시지 표시
+          setProgressMessages(prev => [{
+            timestamp: Date.now(),
+            message: `추출 명령 응답: ${messageStr}`,
+            rawJson: null
+          }, ...prev]);
+        } catch (error) {
+          console.error('추출 명령 응답 처리 중 오류:', error);
+        }
+        
+        return;
+      }
+    };
+
+    // 메시지 핸들러 등록
+    mqttClient.on('message', handleMessage);
+    
+    // 컴포넌트 언마운트 시 이벤트 리스너 제거
+    return () => {
+      mqttClient.off('message', handleMessage);
+    };
+  }, [mqttClient]);
+
+  // 카메라 상태 변경 함수
+  const toggleCamera = (camNumber: number) => {
+    if (!mqttClient) return
+    
+    
+    // 현재 상태 확인 (인덱스는 0부터 시작하므로 camNumber - 1)
+    const currentState = camStates[camNumber - 1]
+    // 토글할 새 상태
+    const newState = currentState === "ON" ? "OFF" : "ON"
+    // 메시지 값 (ON -> 1, OFF -> 0)
+    const messageValue = newState === "ON" ? "1" : "0"
+    
+    // 메시지 발행
+    mqttClient.publish(getCamCommandTopic(camNumber), messageValue)
+    
+    // UI에 즉시 반영 (실제 상태는 구독한 state 토픽으로부터 업데이트될 것임)
+    setCamStates(prev => {
+      const newStates = [...prev]
+      newStates[camNumber - 1] = newState
+      return newStates
+    })
+  }
+
+  // 밸브 상태 변경
+  const changeValveState = (newState: string) => {
+    if (mqttClient) {
+      console.log(`[디버깅] 밸브 상태 변경: ${newState}`);
+      
+      // 상태에 따른 MQTT 메시지 결정
+      let mqttMessage = '';
+      
+      if (newState === 'extraction_circulation') {
+        mqttMessage = '1000';
+      } else if (newState === 'full_circulation') {
+        mqttMessage = '0000';
+      } else if (newState === 'valve_exchange') {
+        mqttMessage = '0100'; // 본탱크 수집
+      } else if (newState === 'extraction_open') {
+        mqttMessage = '1100';
+      }
+      
+      if (mqttMessage) {
+        console.log(`[디버깅] 밸브 상태 변경 MQTT 메시지 발행: ${mqttMessage}, 토픽: ${VALVE_INPUT_TOPIC}`);
+        mqttClient.publish(VALVE_INPUT_TOPIC, mqttMessage)
+        
+        // STATUS 요청 메시지 제거
+        // setTimeout(() => {
+        //   console.log("[디버깅] 밸브 상태 요청 메시지 추가 전송: STATUS");
+        //   // mqttClient.publish(VALVE_INPUT_TOPIC, "STATUS");
+        // }, 500);
+        
+        // 즉시 UI 업데이트를 위해 로컬에서도 처리
+        console.log("[디버깅] 로컬에서 밸브 상태 메시지 파싱: ", mqttMessage);
+        parseValveStateMessage(mqttMessage);
+      } else {
+        console.log(`[디버깅] 알 수 없는 밸브 상태: ${newState}, 아무 동작도 하지 않음`);
+      }
+    } else {
+      console.log('[디버깅] MQTT 클라이언트가 없어 밸브 상태를 변경할 수 없습니다.');
+    }
+  }
+
+  // 펌프 토글 (ON/OFF) 함수 추가
+  const togglePump = (pumpId: number) => {
+    if (!mqttClient) return;
+    
+    // 현재 펌프 상태 확인
+    const currentState = tankData?.tanks?.[pumpId - 1]?.pumpStatus || "OFF";
+    // 토글할 새 상태
+    const newState = currentState === "ON" ? "OFF" : "ON";
+    // 메시지 값 (ON -> 1, OFF -> 0)
+    const messageValue = newState === "ON" ? "1" : "0";
+    
+    console.log(`펌프 ${pumpId} 토글: ${currentState} -> ${newState}`);
+    
+    // 명령 발행
+    const topic = getPumpCommandTopic(pumpId);
+    mqttClient.publish(topic, messageValue);
+    
+    // 상태 즉시 업데이트 (UI 반응성 향상)
+    setTankData(prev => {
+      const updatedTanks = prev.tanks.map(tank => {
+        if (tank.id === pumpId) {
+          return { ...tank, pumpStatus: newState as "ON" | "OFF" };
+        }
+        return tank;
+      });
+      
+      const updatedState = { ...prev, tanks: updatedTanks };
+      
+      // 서버에 상태 저장
+      saveStateToServer(updatedState);
+      
+      return updatedState;
+    });
+  };
+  
+  // 펌프 리셋 함수 추가
+  const resetPump = (pumpId: number) => {
+    if (!mqttClient) return;
+    
+    console.log(`펌프 ${pumpId} 리셋 명령 발행`);
+    
+    // 리셋 명령(3) 발행 - 리셋 명령은 코드 3입니다
+    const topic = getPumpCommandTopic(pumpId);
+    mqttClient.publish(topic, "3");
+  };
+  
+  // 펌프 K 명령 함수 추가
+  const sendPumpKCommand = (pumpId: number) => {
+    if (!mqttClient) return;
+    
+    console.log(`펌프 ${pumpId}에 k 명령 발행`);
+    
+    // k 명령 발행 (소문자로 변경)
+    const topic = getPumpCommandTopic(pumpId);
+    mqttClient.publish(topic, "k");
+  };
+
+  // 추출 명령 발행 함수 추가
+      client.on('connect', () => {
+        console.log('MQTT 서버에 연결됨');
+        setMqttStatus('연결됨');
+        
+        // 연결 직후 API로 시스템 상태 조회만 실행
+        refreshSystemState();
+      });
+      
+      client.on('disconnect', () => {
+        console.log('MQTT 서버 연결 끊김');
+        setMqttStatus('연결 끊김');
+      });
+      
+      client.on('error', (err) => {
+        console.error('MQTT 오류:', err);
+        setMqttStatus(`오류: ${err.message}`);
+      });
+      
+      // 주요 상태 토픽 구독
+      client.subscribe(VALVE_STATE_TOPIC);
+      client.subscribe(PROCESS_PROGRESS_TOPIC);
+      client.subscribe(ERROR_TOPIC);
+      
+      // 메시지 핸들러 등록
+      client.on('message', (topic, message) => {
+        const messageStr = message.toString();
+        
+        if (topic === VALVE_STATE_TOPIC) {
+          // 밸브 상태 업데이트
+          console.log('밸브 상태 메시지:', messageStr);
+          setCurrentValveState(messageStr);
+          
+          // 탱크 시스템 데이터 업데이트
+          setTankData(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              valveState: messageStr
+            };
+          });
+        } 
+        else if (topic === PROCESS_PROGRESS_TOPIC) {
+          // 진행 상태 업데이트
+          try {
+            const progressData = JSON.parse(messageStr);
+            setProgressData(progressData);
+            
+            // 진행률이 포함된 경우
+            if (progressData.percent) {
+              const percentValue = parseInt(progressData.percent.replace('%', ''));
+              setProgress(percentValue);
+            }
+            
+            // 탱크 시스템 데이터 업데이트 - 진행 정보 포함
+            setTankData(prev => {
+              if (!prev) return prev;
+              
+              return {
+                ...prev,
+                progressInfo: {
+                  step: progressData.step || '',
+                  elapsedTime: progressData.elapsed_time || '00:00:00',
+                  remainingTime: progressData.remaining_time || '00:00:00',
+                  totalRemainingTime: progressData.total_remaining_time || '00:00:00'
+                }
+              };
+            });
+            
+            // 메시지 기록
+            addProgressMessage({
+              timestamp: Date.now(),
+              message: progressData.step || "진행 정보",
+              rawJson: messageStr
+            });
+          } catch (error) {
+            console.error('진행 메시지 파싱 오류:', error);
+          }
+        }
+        
+        // 오류 관련 메시지
+        if (topic === ERROR_TOPIC) {
+          console.error('MQTT 오류 메시지:', messageStr);
+          
+          // 메시지 기록 - 오류는 별도 표시
+          addProgressMessage({
+            timestamp: Date.now(),
+            message: `오류: ${messageStr}`,
+            rawJson: messageStr
+          });
+        }
+        
+        // 상태 메시지 관련해서는 특별한 처리가 필요하지 않음 - 자동으로 저장됨
+      });
+      
+      // 탱크 레벨 및 펌프 상태 토픽 구독
+      for (let i = 1; i <= 6; i++) {
+        client.subscribe(getTankLevelTopic(i));
+        client.subscribe(getPumpStateTopic(i));
+      }
+      
+      // 서버 연결
+      const serverUrl = process.env.NODE_ENV === 'development' 
+        ? 'ws://dev.codingpen.com:1884'
+        : 'wss://api.codingpen.com:8884';
+      
+      client.connect(serverUrl, 'dnature', 'XihQ2Q%RaS9u#Z3g');
+      setMqttClient(client);
+    }
+  }
+  
+  // 토픽 직접 게시 함수 (STATUS 메시지 필터링)
+  const publishToTopic = (topic: string, message: string) => {
+    if (!mqttClient) {
+      console.error('MQTT 클라이언트가 초기화되지 않았습니다.');
+      return;
+    }
+    
+    // STATUS 메시지는 더 이상 사용하지 않음
+    if (message.trim() === 'STATUS') {
+      console.log('STATUS 메시지는 사용되지 않습니다. API를 통해 상태를 조회합니다.');
+      refreshSystemState();
+      return;
+    }
+    
+    // tank-system/request와 tank-system/status 토픽은 더 이상 사용하지 않음
+    if (topic === 'tank-system/request' || topic === 'tank-system/status') {
+      console.log(`토픽 ${topic}은(는) 더 이상 사용되지 않습니다. API를 통해 상태를 조회합니다.`);
+      refreshSystemState();
+      return;
+    }
+    
+    // 일반 메시지 발행
+    mqttClient.publish(topic, message);
+  };
+  
+  // 밸브 명령 발행
+  const handleValveCommand = (command: string) => {
+    if (!mqttClient) return;
+    
+    // 'STATUS' 명령은 더 이상 사용하지 않음
+    if (command.trim() === 'STATUS') {
+      refreshSystemState();
+      return;
+    }
+    
+    mqttClient.publish(VALVE_INPUT_TOPIC, command);
+  };
+
+  // 시간 형식화 함수 추가
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // 메시지 발행
+  const publishMessage = (topic: string, message: string) => {
+    if (!mqttClient) {
+      console.log('MQTT 클라이언트가 연결되지 않아 메시지를 발행할 수 없습니다.');
+      return;
+    }
+    
+    // STATUS 메시지는 더 이상 보내지 않음
+    if (message === "STATUS") {
+      console.log("STATUS 메시지는 더 이상 전송되지 않습니다.");
+      refreshSystemState();
+      return;
+    }
+    
+    mqttClient.publish(topic, message);
+    console.log(`메시지 발행: ${topic} - ${message}`);
+  };
+
+  // 토픽 구독 함수
+  const subscribeToTopic = () => {
+    if (!searchTopic || !mqttClient) return
+    
+    mqttClient.subscribe(searchTopic)
+    setSearchTopic("")
+  }
+
+  // 밸브 상태 파싱 함수
+  const parseValveStateMessage = (message: string) => {
+    console.log(`[디버깅] 밸브 상태 메시지 파싱 시작: ${message}`);
+    
+    // 밸브 상태 메시지 형식 확인 (valveA=OFF(전체순환_교환), valveB=ON(열림)...)
+    if (message.includes('valveA=') && message.includes('valveB=')) {
+      console.log(`[디버깅] 밸브 상태 메시지 형식 감지: ${message}`);
+      
+      // valveA 상태 추출 (ON/OFF)
+      const valveAState = message.includes('valveA=ON') ? '1' : '0';
+      const valveBState = message.includes('valveB=ON') ? '1' : '0';
+      const valveCState = message.includes('valveC=ON') ? '1' : '0';
+      const valveDState = message.includes('valveD=ON') ? '1' : '0';
+      
+      // 밸브 설명 추출 (괄호 안의 내용)
+      let valveADesc = '';
+      let valveBDesc = '';
+      
+      // valveA 설명 추출
+      const valveADescMatch = message.match(/valveA=(?:ON|OFF)\(([^)]+)\)/);
+      if (valveADescMatch && valveADescMatch[1]) {
+        valveADesc = valveADescMatch[1];
+      } else {
+        // 기본 설명 설정
+        valveADesc = valveAState === '1' ? '추출순환' : '전체순환';
+      }
+      
+      // valveB 설명 추출
+      const valveBDescMatch = message.match(/valveB=(?:ON|OFF)\(([^)]+)\)/);
+      if (valveBDescMatch && valveBDescMatch[1]) {
+        valveBDesc = valveBDescMatch[1];
+      } else {
+        // 기본 설명 설정
+        valveBDesc = valveBState === '1' ? '열림' : '닫힘';
+      }
+      
+      console.log(`[디버깅] 밸브 상태 및 설명 추출: A=${valveAState}(${valveADesc}), B=${valveBState}(${valveBDesc})`);
+      
+      // 4자리 밸브 상태 코드 생성
+      const valveStateCode = `${valveAState}${valveBState}${valveCState}${valveDState}`;
+      
+      // 현재 활성화된 밸브 상태 저장 (버튼 스타일 변경에 사용)
+      setCurrentValveState(valveStateCode);
+      
+      setTankData(prev => {
+        const updatedState = {
+          ...prev,
+          valveState: valveStateCode,
+          valveADesc,
+          valveBDesc,
+          valveStatusMessage: message
+        };
+        
+        console.log('[디버깅] 업데이트될 탱크 데이터 상태', updatedState);
+        
+        // 업데이트된 상태 저장
+        saveStateToServer(updatedState);
+        
+        return updatedState;
+      });
+      
+      console.log('[디버깅] 상태 업데이트 함수 호출 완료');
+      
+      return {
+        valveState: valveStateCode,
+        valveAState,
+        valveBState, 
+        valveCState,
+        valveDState,
+        valveADesc,
+        valveBDesc
+      };
+    }
+    
+    // 0100 형식의 메시지 처리 (밸브 상태 코드)
+    if (message.match(/^[0-1]{4}$/)) {
+      // 4자리 0과 1 코드인 경우
+      console.log(`[디버깅] 밸브 상태 코드 감지: ${message}`);
+      
+      // 각 밸브 상태 추출
+      const valveAState = message[0];
+      const valveBState = message[1];
+      const valveCState = message[2];
+      const valveDState = message[3];
+      
+      console.log(`[디버깅] 밸브 상태 추출: A=${valveAState}, B=${valveBState}, C=${valveCState}, D=${valveDState}`);
+      
+      // 밸브 설명 설정 - 앞 두 자리에 따라 설명 결정
+      let valveADesc = '';
+      let valveBDesc = '';
+      
+      // 4가지 가능한 상태에 따른 설명 설정
+      if (message.startsWith('00')) {
+        // 0000: 전체순환
+        valveADesc = '전체순환';
+        valveBDesc = '닫힘';
+        console.log('[디버깅] 밸브 상태: 전체순환, 밸브B 닫힘');
+      } else if (message.startsWith('10')) {
+        // 1000: 추출순환
+        valveADesc = '추출순환';
+        valveBDesc = '닫힘';
+        console.log('[디버깅] 밸브 상태: 추출순환, 밸브B 닫힘');
+      } else if (message.startsWith('01')) {
+        // 0100: 본탱크 수집
+        valveADesc = '본탱크 수집';
+        valveBDesc = '열림';
+        console.log('[디버깅] 밸브 상태: 본탱크 수집, 밸브B 열림');
+      } else if (message.startsWith('11')) {
+        // 1100: 추출개방
+        valveADesc = '추출개방';
+        valveBDesc = '열림';
+        console.log('[디버깅] 밸브 상태: 추출개방, 밸브B 열림');
+      }
+      
+      console.log(`[디버깅] 밸브 상태 파싱 결과: A=${valveAState}(${valveADesc}), B=${valveBState}(${valveBDesc}), C=${valveCState}, D=${valveDState}`);
+      
+      // 현재 활성화된 밸브 상태 저장 (버튼 스타일 변경에 사용)
+      setCurrentValveState(message);
+      
+      // 탱크 데이터 상태 업데이트 전 로그
+      console.log('[디버깅] 탱크 데이터 상태 업데이트 전');
+      
+      setTankData(prev => {
+        const updatedState = {
+          ...prev,
+          valveState: message,
+          valveADesc,
+          valveBDesc,
+          valveStatusMessage: `valveA=${valveAState === '1' ? 'ON' : 'OFF'}, valveB=${valveBState === '1' ? 'ON' : 'OFF'}, valveC=${valveCState === '1' ? 'ON' : 'OFF'}, valveD=${valveDState === '1' ? 'ON' : 'OFF'}`
+        };
+        
+        console.log('[디버깅] 업데이트될 탱크 데이터 상태', updatedState);
+        
+        // 업데이트된 상태 저장
+        saveStateToServer(updatedState);
+        
+        return updatedState;
+      });
+      
+      console.log('[디버깅] 상태 업데이트 함수 호출 완료');
+      
+      // 밸브 상태 정보 반환
+      return {
+        valveState: message,
+        valveAState,
+        valveBState, 
+        valveCState,
+        valveDState,
+        valveADesc,
+        valveBDesc
+      };
+    }
+    
+    // 코드 형식이 아닌 경우 기본 값 반환
+    console.log('[디버깅] 밸브 상태 메시지가 코드 형식이 아님, 기본값 반환');
+    return { valveState: message };
+  }
+
+  // K 버튼 활성화 상태 관리
+  const [kButtonActive, setKButtonActive] = useState(false);
+  const [pumpMessages, setPumpMessages] = useState<{[key: number]: string}>({});
+
+  // MQTT 메시지 구독 설정
+  useEffect(() => {
+    if (mqttClient) {
+      // K 버튼 활성화 상태 구독
+      mqttClient.subscribe("extwork/inverter1/overallstate");
+      
+      // 각 펌프 상태 메시지 구독
+      for (let i = 1; i <= 6; i++) {
+        mqttClient.subscribe(`extwork/inverter${i}/overallstate`);
+      }
+      
+      // 큐 상태 구독 추가
+      mqttClient.subscribe("extwork/extraction/queue/status");
+      
+      // 메시지 수신 처리
+      mqttClient.on("message", (topic, message) => {
+        const messageStr = message.toString();
+        
+        // K 버튼 활성화 상태 처리
+        if (topic === "extwork/inverter1/overallstate") {
+          if (messageStr.includes("K 명령 수신: 수위 센서 신호 대기 모드 비활성화")) {
+            setKButtonActive(false);
+          } else if (messageStr.includes("K 명령 수신: 수위 센서 신호 대기 모드 활성화")) {
+            setKButtonActive(true);
+          }
+        }
+        
+        // 각 펌프 상태 메시지 처리
+        const pumpMatch = topic.match(/extwork\/inverter(\d+)\/overallstate/);
+        if (pumpMatch && pumpMatch[1]) {
+          const pumpId = parseInt(pumpMatch[1]);
+          setPumpMessages(prev => ({
+            ...prev,
+            [pumpId]: messageStr
+          }));
+        }
+        
+        // 큐 상태 처리
+        if (topic === "extwork/extraction/queue/status") {
+          try {
+            const queueStatus = JSON.parse(messageStr);
+            setQueueStatus(queueStatus);
+          } catch (error) {
+            console.error('큐 상태 파싱 오류:', error);
+          }
+        }
+      });
+    }
+    
+    return () => {
+      if (mqttClient) {
+        mqttClient.unsubscribe("extwork/extraction/queue/status");
+        mqttClient.unsubscribe("extwork/inverter1/overallstate");
+        for (let i = 1; i <= 6; i++) {
+          mqttClient.unsubscribe(`extwork/inverter${i}/overallstate`);
+        }
+      }
+    };
+  }, [mqttClient]);
+
+  // 저장된 시퀀스 상태 추가
+  const [savedSequences, setSavedSequences] = useState<PumpSequence[]>([]);
+  
+  // 시퀀스 상태 수정 - 인터페이스 사용
+  const [sequences, setSequences] = useState<PumpSequence[]>([]);
+
+  // 시퀀스 이름 상태 추가
+  const [currentSequenceName, setCurrentSequenceName] = useState<string>("");
+  
+  // 진행 정보 상태 추가
+  const [progressInfo, setProgressInfo] = useState<{
+    step: string;
+    elapsedTime: string;
+    remainingTime: string;
+    totalRemainingTime: string;
+  }>({
+    step: "S(0/0)",
+    elapsedTime: "00:00",
+    remainingTime: "00:00",
+    totalRemainingTime: "00:00"
+  });
+
+  // 프로세스 기본값 생성 함수 수정
+  const getDefaultProcess = (mode: number) => {
+    const firstDigit = Math.floor(mode / 10);
+    switch (firstDigit) {
+      case 1: // 동시 모드: 6개 펌프 가동시간
+        return { process: Array(6).fill(0), wait_time: 5 };
+      case 2: // 순차 모드: 18개 토큰 (펌프별 가동시간,대기시간,반복횟수)
+        // 순차 모드에서는 각 펌프마다 3개의 토큰이 필요하므로 wait_time 필드 제거
+        return { process: Array(18).fill(0) };
+      case 3: // 중첩 모드: 12개 토큰 (펌프별 가동시간,대기시간)
+        // 중첩 모드에서는 각 펌프마다 2개의 토큰이 필요하므로 wait_time 필드 제거
+        return { process: Array(12).fill(0) };
+      default:
+        return { process: Array(18).fill(0) };
+    }
+  };
+
+  // 현재 시퀀스를 저장
+  const saveCurrentSequence = () => {
+    if (!currentSequenceName || sequences.length === 0) {
+      toast({
+        title: "저장 실패",
+        description: "시퀀스 이름과 내용을 확인해주세요.",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    // 이름 안전하게 가공
+    const safeName = currentSequenceName.trim();
+    
+    // 중복 이름 확인
+    const existingIndex = savedSequences.findIndex(seq => seq.name === safeName);
+    if (existingIndex !== -1) {
+      if (!confirm(`'${safeName}' 시퀀스가 이미 존재합니다. 덮어쓰시겠습니까?`)) {
+        return;
+      }
+    }
+    
+    // 시퀀스 이름 추가
+    const namedSequences = sequences.map(seq => ({
+      ...seq,
+      name: safeName,
+      creation_time: new Date().toISOString(),
+      id: uuidv4()
+    }));
+    
+    // 기존 저장 목록에 추가 또는 업데이트
+    let updatedSavedSequences: PumpSequence[] = [];
+    
+    if (existingIndex !== -1) {
+      // 기존 항목 업데이트
+      updatedSavedSequences = savedSequences.map((seq, index) => 
+        index === existingIndex ? namedSequences[0] : seq
+      );
+    } else {
+      // 새 항목 추가
+      updatedSavedSequences = [...savedSequences, ...namedSequences];
+    }
+    
+    setSavedSequences(updatedSavedSequences);
+    
+    // 로컬 저장
+    const localSaved = saveSequencesToLocalStorage(updatedSavedSequences);
+    
+    // 서버 저장
+    saveSequencesToServer(updatedSavedSequences)
+      .then(success => {
+        if (success) {
+          toast({
+            title: "저장 성공",
+            description: `'${safeName}' 시퀀스가 저장되었습니다.`,
+          });
+        } else {
+          toast({
+            title: "서버 저장 실패",
+            description: "로컬에만 저장되었습니다.",
+            variant: "warning"
+          });
+        }
+      })
+      .catch(err => {
+        console.error('시퀀스 저장 오류:', err);
+        toast({
+          title: "서버 저장 오류",
+          description: "로컬에만 저장되었습니다.",
+          variant: "destructive"
+        });
+      });
+      
+    // 입력 필드 초기화
+    setCurrentSequenceName("");
+  };
+  
+  // 저장된 시퀀스 불러오기
+  const loadSavedSequence = (sequenceName: string) => {
+    const filteredSequences = savedSequences.filter(seq => seq.name === sequenceName);
+    if (filteredSequences.length > 0) {
+      setSequences(filteredSequences);
+      setCurrentSequenceName(sequenceName);
+    }
+  };
+  
+  // 저장된 시퀀스 삭제
+  const deleteSavedSequence = (sequenceName: string) => {
+    // 찾은 시퀀스 ID
+    let sequenceId = '';
+    
+    // 해당 이름의 시퀀스 삭제
+    const newSavedSequences = savedSequences.filter(seq => {
+      if (seq.name === sequenceName) {
+        sequenceId = seq.id || ''; // 삭제할 시퀀스의 ID 저장
+        return false; // 해당 이름의 시퀀스 제거
+      }
+      return true; // 다른 시퀀스는 유지
+    });
+    
+    // 로컬 스토리지에서 업데이트
+    setSavedSequences(newSavedSequences); 
+    saveSequencesToLocalStorage(newSavedSequences);
+    
+    // 서버에서도 삭제 (ID가 있는 경우)
+    if (sequenceId) {
+      deleteSequenceFromServer(sequenceId).then(success => {
+        if (success) {
+          console.log(`시퀀스 '${sequenceName}' (ID: ${sequenceId})가 서버에서 성공적으로 삭제됨`);
+        } else {
+          console.warn(`시퀀스 '${sequenceName}' (ID: ${sequenceId})를 서버에서 삭제하지 못함`);
+        }
+      });
+    }
+    
+    // 현재 선택된 시퀀스와 이름이 같으면 리셋
+    if (currentSequence?.name === sequenceName) {
+      resetSequence();
+    }
+  };
+  
+  // 저장된 시퀀스 실행
+  const runSavedSequence = useCallback((sequenceName: string) => {
+    try {
+      // 이미 실행 중인 시퀀스 확인
+      if (workInProgress[sequenceName]) {
+        console.log(`시퀀스 '${sequenceName}'가 이미 실행 중입니다.`);
+        return;
+      }
+
+      // 저장된 시퀀스 찾기
+      const savedSequence = savedSequences.find(seq => seq.name === sequenceName);
+      if (!savedSequence) {
+        console.error(`시퀀스 '${sequenceName}'를 찾을 수 없습니다.`);
+        return;
+      }
+
+      // MQTT 토픽에 시퀀스 발행
+      if (mqttClient && mqttClient.connected) {
+        const jsonStr = JSON.stringify(savedSequence.sequenceData);
+        mqttClient.publish(EXTRACTION_INPUT_TOPIC, jsonStr);
+        console.log(`시퀀스 '${sequenceName}' 발행됨:`, jsonStr);
+        
+        // 현재 실행 중인 시퀀스 이름을 로컬 스토리지에 저장
+        localStorage.setItem('currentRunningSequence', sequenceName);
+        
+        // 실행 중 상태 업데이트
+        setWorkInProgress(prev => ({
+          ...prev,
+          [sequenceName]: true
+        }));
+        
+        // 서버에 현재 실행 중인 시퀀스 저장
+            ...runningSequences
+          }));
+        }
+      } catch (localError) {
+        console.error('로컬 스토리지에서 실행 중인 시퀀스 정보 로드 실패:', localError);
+      }
+    };
+    
+    // 저장된 시퀀스 및 실행 중인 시퀀스 정보 로드
+    loadSavedSequences();
+    loadRunningSequenceInfo();
+  }, []);
+
+  // 실행 중인 시퀀스 정보 저장 함수 추가
+  const saveRunningSequenceInfo = async (sequenceName: string, isRunning: boolean) => {
+    console.log(`시퀀스 실행 상태 저장: ${sequenceName} = ${isRunning}`);
+    
+    // 현재 실행 중인 시퀀스 상태 업데이트
+    setWorkInProgress(prev => {
+      const updated = {
+        ...prev,
+        [sequenceName]: isRunning
+      };
+      
+      // 실행 중이 아닌 경우 해당 키 제거
+      if (!isRunning) {
+        delete updated[sequenceName];
+      }
+      
+      // 로컬 스토리지에 저장
+      localStorage.setItem('currentRunningSequences', JSON.stringify(updated));
+      
+      return updated;
+    });
+    
+    // 서버에도 실행 중인 시퀀스 정보 저장
+    try {
+      // 현재 시스템 상태 가져오기
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+      const getResponse = await fetch(`${API_URL}/api/system-state`);
+      
+      let currentState = {};
+      if (getResponse.ok) {
+        currentState = await getResponse.json();
+      }
+      
+      // workInProgress 상태를 포함한 업데이트된 상태
+      const updatedState = {
+        ...currentState,
+        runningSequences: {
+          ...(currentState.runningSequences || {}),
+          [sequenceName]: isRunning
+        }
+      };
+      
+      // 실행 중이 아닌 경우 해당 키 제거
+      if (!isRunning && updatedState.runningSequences) {
+        delete updatedState.runningSequences[sequenceName];
+      }
+      
+      // 서버에 저장
+      const saveResponse = await fetch(`${API_URL}/api/system-state`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updatedState)
+      });
+      
+      if (saveResponse.ok) {
+        console.log('실행 중인 시퀀스 정보 서버 저장 성공');
+      } else {
+        console.error('실행 중인 시퀀스 정보 서버 저장 실패:', await saveResponse.text());
+      }
+    } catch (error) {
+      console.error('실행 중인 시퀀스 정보 서버 저장 중 오류:', error);
+    }
+  };
+
+  // MQTT 메시지 처리 부분에 시퀀스 완료 감지 로직 추가
+  // ... existing code ...
+
+  // 시퀀스 실행 함수 수정 - 시퀀스 실행 시 상태 저장
+  const runSavedSequence = (sequenceName: string, repeats: number = 1) => {
+    // 이미 진행 중인 경우 실행하지 않음
+    if (workInProgress[sequenceName]) return;
+    
+    const filteredSequences = savedSequences.filter(seq => seq.name === sequenceName);
+    if (filteredSequences.length > 0 && mqttClient) {
+      // 시퀀스를 MQTT 메시지로 직접 발행
+      const sequence = { 
+        sequences: filteredSequences.map(seq => ({
+          ...seq,
+          repeats: repeats
+        }))
+      };
+      
+      const topic = "extwork/extraction/input";
+      
+      // 필드 순서 재정렬 및 process 배열 형식 개선
+      const formattedSequences = sequence.sequences.map(seq => {
+        const firstDigit = Math.floor(seq.operation_mode / 10);
+        
+        // 기본 객체 구조 (필드 순서 조정)
+        const formattedSeq: any = {
+          operation_mode: seq.operation_mode,
+          repeats: repeats || seq.repeats || 1,
+          process: [...seq.process]
+        };
+        
+        // 순차 모드가 아닌 경우에만 wait_time 추가
+        if (firstDigit !== 2 && (seq as any).wait_time !== undefined) {
+          formattedSeq.wait_time = (seq as any).wait_time;
+        }
+        
+        return formattedSeq;
+      });
+      
+      const formattedSequence = { sequences: formattedSequences };
+      
+      // 모드별 포맷팅을 위한 JSON 문자열 생성
+      let message = JSON.stringify(formattedSequence, null, 2);
+      
+      // JSON 메시지 발행
+      try {
+        mqttClient.publish(topic, message);
+        
+        // 현재 실행 중인 시퀀스 이름을 로컬 스토리지에 저장
+        localStorage.setItem('currentRunningSequence', sequenceName);
+        
+        // 실행 중 상태 업데이트
+        setWorkInProgress(prev => ({
+          ...prev,
+          [sequenceName]: true
+        }));
+        
+        // 서버에 실행 중인 시퀀스 정보 저장
+        saveRunningSequenceToServer(sequenceName, true);
+        
+        // 로그 남기기
+        setProgressMessages(prev => [{
+          timestamp: Date.now(),
+          message: `시퀀스 '${sequenceName}' 실행 (${repeats}회)`,
+          rawJson: message
+        }, ...prev]);
+        
+        // 작업 로그 생성 및 저장
+        const workLog = {
+          sequenceName: sequenceName,
+          startTime: new Date().toISOString(),
+          status: 'in_progress',
+          operationMode: filteredSequences[0].operation_mode.toString(),
+          repeats: repeats,
+          selectedPumps: JSON.stringify(filteredSequences[0].selectedPumps || []),
+          errorDetails: ''
+        };
+        
+        workLogService.createWorkLog(workLog).then(newLogId => {
+          setCurrentWorkLogId(newLogId);
+          loadWorkLogs();
+        });
+        
+        toast({
+          title: "시퀀스 실행 시작",
+          description: `'${sequenceName}' 시퀀스가 실행되었습니다.`,
+        });
+        
+        return true;
+      } catch (error) {
+        console.error('시퀀스 실행 중 오류:', error);
+        
+        toast({
+          title: "시퀀스 실행 실패",
+          description: `'${sequenceName}' 시퀀스 실행 중 오류가 발생했습니다.`,
+          variant: "destructive"
+        });
+        
+        return false;
+      }
+    }
+    
+    return false;
+  };
+
+  // MQTT 메시지 수신 부분에 시퀀스 완료 감지 로직 추가
+  // ... existing code ...
+
+  // MQTT 메시지 핸들러 수정하여 시퀀스 완료 감지
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    console.log("MQTT 메시지 핸들러 설정 중...");
+    
+    const handleMessage = (topic: string, message: Buffer) => {
+      const messageStr = message.toString();
+      
+      // 추출 명령 응답 처리 (extwork/extraction/output)
+      if (topic === EXTRACTION_OUTPUT_TOPIC) {
+        console.log(`추출 명령 응답 수신: ${messageStr}`);
+        
+        try {
+          // 작업목록 상태 업데이트
+          if (messageStr.includes("JSON 명령이 성공적으로 처리되었습니다.")) {
+            // 추출 성공 시 해당 작업목록 진행중 상태로 변경
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 시퀀스 실행 상태 저장
+              saveRunningSequenceInfo(currentRunningSequence, true);
+            }
+          } else if (messageStr.includes("공정 종료") || messageStr.includes("완료") || messageStr.includes("중단")) {
+            // 공정 종료 시 작업목록 상태 초기화
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 시퀀스 실행 종료 상태 저장
+              saveRunningSequenceInfo(currentRunningSequence, false);
+              localStorage.removeItem('currentRunningSequence');
+              
+              // 완료 알림
+              toast({
+                title: "시퀀스 실행 완료",
+                description: `'${currentRunningSequence}' 시퀀스가 완료되었습니다.`,
+              });
+            }
+          }
+          
+          // 메시지 표시
+          setProgressMessages(prev => [{
+            timestamp: Date.now(),
+            message: `추출 명령 응답: ${messageStr}`,
+            rawJson: null
+          }, ...prev]);
+        } catch (error) {
+          console.error('추출 명령 응답 처리 중 오류:', error);
+        }
+      }
+      
+      // 진행 상황 토픽 처리 (extwork/extraction/progress)
+      if (topic === PROCESS_PROGRESS_TOPIC) {
+        try {
+          // JSON 형식인 경우 파싱하여 저장
+          const jsonData = JSON.parse(messageStr);
+          
+          // 시퀀스 완료 감지
+          if (jsonData.status === 'completed' || messageStr.includes('completed')) {
+            // 현재 실행 중인 시퀀스가 있으면 완료 처리
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 시퀀스 실행 종료 상태 저장
+              saveRunningSequenceInfo(currentRunningSequence, false);
+              localStorage.removeItem('currentRunningSequence');
+              
+              // 완료 알림
+              toast({
+                title: "시퀀스 실행 완료",
+                description: `'${currentRunningSequence}' 시퀀스가 완료되었습니다.`,
+              });
+            }
+          }
+          
+          // 작업 중단 메시지 감지 시
+          if (jsonData.status === 'stopped' || messageStr.includes('stopped')) {
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 시퀀스 실행 종료 상태 저장
+              saveRunningSequenceInfo(currentRunningSequence, false);
+              localStorage.removeItem('currentRunningSequence');
+              
+              // 중단 알림
+              toast({
+                title: "시퀀스 실행 중단",
+                description: `'${currentRunningSequence}' 시퀀스가 중단되었습니다.`,
+                variant: "warning"
+              });
+            }
+          }
+        } catch (error) {
+          // JSON 파싱 오류, 무시
+        }
+      }
+      
+      // 다른 메시지 처리 로직은 유지
+      // ... existing code ...
+    };
+    
+    // 메시지 핸들러 등록
+    mqttClient.on('message', handleMessage);
+    
+    return () => {
+      mqttClient.off('message', handleMessage);
+    };
+  }, [mqttClient]);
+
+  // 실행 중인 시퀀스 정보를 서버에 저장하는 함수 추가
+  const saveRunningSequenceToServer = async (sequenceName: string, isRunning: boolean) => {
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+      
+      // 서버에서 현재 시스템 상태 가져오기
+      const getResponse = await fetch(`${API_URL}/api/system-state`);
+      
+      if (!getResponse.ok) {
+        console.error('서버에서 시스템 상태를 가져올 수 없습니다.');
+        return;
+      }
+      
+      // 현재 서버 상태 데이터
+      const currentState = await getResponse.json();
+      
+      // 실행 중인 시퀀스 정보 업데이트
+      let runningSequences = currentState.runningSequences || {};
+      
+      if (isRunning) {
+        // 시퀀스가 실행 중이면 추가
+        runningSequences[sequenceName] = true;
+      } else {
+        // 시퀀스가 중단/완료되었으면 제거
+        if (runningSequences[sequenceName]) {
+          delete runningSequences[sequenceName];
+        }
+      }
+      
+      // 업데이트된 상태를 서버에 저장
+      const updateResponse = await fetch(`${API_URL}/api/system-state`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ...currentState,
+          runningSequences
+        })
+      });
+      
+      if (!updateResponse.ok) {
+        console.error('서버에 실행 중인 시퀀스 정보를 저장할 수 없습니다.');
+      } else {
+        console.log(`서버에 ${sequenceName} 실행 상태가 ${isRunning ? '실행 중' : '완료/중단'}으로 업데이트되었습니다.`);
+      }
+    } catch (error) {
+      console.error('실행 중인 시퀀스 정보 저장 중 오류:', error);
+    }
+  };
+
+  // 컴포넌트 마운트 시 실행 중인 시퀀스 정보 로드
+  useEffect(() => {
+    // 로컬 스토리지에서 실행 중인 시퀀스 정보 확인
+    const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+    if (currentRunningSequence) {
+      console.log(`실행 중인 시퀀스 감지: ${currentRunningSequence}`);
+      
+      // 실행 중 상태 업데이트
+      setWorkInProgress(prev => ({
+        ...prev,
+        [currentRunningSequence]: true
+      }));
+    }
+    
+    // 서버에서 시스템 상태 로드
+    const loadSystemState = async () => {
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+        const response = await fetch(`${API_URL}/api/system-state`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          // 실행 중인 시퀀스 정보가 있으면 업데이트
+          if (data.runningSequences && Object.keys(data.runningSequences).length > 0) {
+            console.log('서버에서 실행 중인 시퀀스 정보 로드:', data.runningSequences);
+            
+            // 실행 중 상태 업데이트
+            setWorkInProgress(prev => ({
+              ...prev,
+              ...data.runningSequences
+            }));
+          }
+        }
+      } catch (error) {
+        console.error('서버에서 시스템 상태 로드 중 오류:', error);
+      }
+    };
+    
+    loadSystemState();
+  }, []);
+
+  // MQTT 메시지 수신 시 시퀀스의 완료/중단 감지
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    const handleSequenceStatus = (topic: string, message: Buffer) => {
+      const messageStr = message.toString();
+      
+      // 추출 명령 응답 처리 (extwork/extraction/output)
+      if (topic === EXTRACTION_OUTPUT_TOPIC) {
+        try {
+          // 성공적인 명령 처리 감지
+          if (messageStr.includes("JSON 명령이 성공적으로 처리되었습니다.")) {
+            // 현재 실행 중인 시퀀스가 있으면 실행 중 상태로 설정
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              setWorkInProgress(prev => ({
+                ...prev,
+                [currentRunningSequence]: true
+              }));
+              
+              // 서버에도 상태 저장
+              saveRunningSequenceToServer(currentRunningSequence, true);
+            }
+          }
+          // 완료 또는 중단 메시지 감지
+          else if (messageStr.includes("공정 종료") || messageStr.includes("완료") || messageStr.includes("중단")) {
+            // 현재 실행 중인 시퀀스가 있으면 완료/중단 처리
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 실행 중 상태 해제
+              setWorkInProgress(prev => {
+                const newState = { ...prev };
+                delete newState[currentRunningSequence];
+                return newState;
+              });
+              
+              // 서버 상태 업데이트
+              saveRunningSequenceToServer(currentRunningSequence, false);
+              
+              // 로컬 스토리지에서 제거
+              localStorage.removeItem('currentRunningSequence');
+              
+              // 작업 로그 업데이트
+              if (currentWorkLogId) {
+                workLogService.updateWorkLog(currentWorkLogId, {
+                  status: messageStr.includes("중단") ? 'aborted' : 'completed',
+                  endTime: new Date().toISOString(),
+                  errorDetails: messageStr.includes("중단") ? '작업이 중단되었습니다.' : '작업이 성공적으로 완료되었습니다.'
+                }).then(() => {
+                  loadWorkLogs();
+                  setCurrentWorkLogId(null);
+                });
+              }
+            }
+          }
+        } catch (error) {
+          console.error('추출 명령 응답 처리 중 오류:', error);
+        }
+      }
+      
+      // 진행 상황 토픽 처리 (extwork/extraction/progress)
+      if (topic === PROCESS_PROGRESS_TOPIC) {
+        try {
+          // JSON 형식인 경우 파싱하여 처리
+          const jsonData = JSON.parse(messageStr);
+          
+          // 완료 상태 감지
+          if (jsonData.status === 'completed' || messageStr.includes('completed')) {
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 실행 중 상태 해제
+              setWorkInProgress(prev => {
+                const newState = { ...prev };
+                delete newState[currentRunningSequence];
+                return newState;
+              });
+              
+              // 서버 상태 업데이트
+              saveRunningSequenceToServer(currentRunningSequence, false);
+              
+              // 로컬 스토리지에서 제거
+              localStorage.removeItem('currentRunningSequence');
+              
+              // 작업 로그 업데이트
+              if (currentWorkLogId) {
+                workLogService.updateWorkLog(currentWorkLogId, {
+                  status: 'completed',
+                  endTime: new Date().toISOString(),
+                  errorDetails: '작업이 성공적으로 완료되었습니다.'
+                }).then(() => {
+                  loadWorkLogs();
+                  setCurrentWorkLogId(null);
+                });
+              }
+            }
+          }
+          // 중단 상태 감지
+          else if (jsonData.status === 'stopped' || messageStr.includes('stopped')) {
+            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+            if (currentRunningSequence) {
+              // 실행 중 상태 해제
+              setWorkInProgress(prev => {
+                const newState = { ...prev };
+                delete newState[currentRunningSequence];
+                return newState;
+              });
+              
+              // 서버 상태 업데이트
+              saveRunningSequenceToServer(currentRunningSequence, false);
+              
+              // 로컬 스토리지에서 제거
+              localStorage.removeItem('currentRunningSequence');
+              
+              // 작업 로그 업데이트
+              if (currentWorkLogId) {
+                workLogService.updateWorkLog(currentWorkLogId, {
+                  status: 'aborted',
+                  endTime: new Date().toISOString(),
+                  errorDetails: '작업이 중단되었습니다.'
+                }).then(() => {
+                  loadWorkLogs();
+                  setCurrentWorkLogId(null);
+                });
+              }
+            }
+          }
+        } catch (error) {
+          // JSON 파싱 오류는 무시
+        }
+      }
+    };
+    
+    // 메시지 핸들러 등록
+    mqttClient.on('message', handleSequenceStatus);
+    
+    // 컴포넌트 언마운트 시 이벤트 리스너 제거
+    return () => {
+      mqttClient.off('message', handleSequenceStatus);
+    };
+  }, [mqttClient, currentWorkLogId]);
+
+  // 서버의 시퀀스 데이터 삭제 함수 추가
+  const handleClearServerSequences = async () => {
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+      const response = await fetch(`${API_URL}/api/automation/processes`, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        toast({
+          title: "서버 데이터 삭제 완료",
+          description: "작업목록 서버 데이터가 성공적으로 삭제되었습니다.",
+        });
+        // 로컬 데이터 유지 (선택적으로 변경 가능)
+      } else {
+        console.error('서버 데이터 삭제 실패:', await response.text());
+        toast({
+          title: "서버 데이터 삭제 실패",
+          description: "서버 데이터 삭제 중 오류가 발생했습니다.",
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      console.error('서버 데이터 삭제 중 오류:', error);
+      toast({
+        title: "서버 데이터 삭제 오류",
+        description: "네트워크 오류가 발생했습니다.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  // 컴포넌트 마운트 시 실행 중인 시퀀스 정보 로드
+  useEffect(() => {
+    // 로컬 스토리지에서 실행 중인 시퀀스 정보 로드
+    try {
+      const runningSequenceName = localStorage.getItem('currentRunningSequence');
+      if (runningSequenceName) {
+        setWorkInProgress(prev => ({
+          ...prev,
+          [runningSequenceName]: true
+        }));
+      }
+    } catch (error) {
+      console.error('로컬 스토리지에서 실행 중인 시퀀스 정보 로드 실패:', error);
+    }
+    
+    // 서버에서 실행 중인 시퀀스 정보 로드
+    const loadRunningSequenceInfo = async () => {
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+        const response = await fetch(`${API_URL}/api/system-state`);
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.data && data.data.runningSequences) {
+            // 실행 중 상태 업데이트
+            setWorkInProgress(prev => ({
+              ...prev,
+              ...data.data.runningSequences
+            }));
+          }
+        }
+      } catch (error) {
+        console.error('서버에서 실행 중인 시퀀스 정보 로드 실패:', error);
+      }
+    };
+    
+    loadRunningSequenceInfo();
+  }, []);
+
+  // 여러 시퀀스를 일괄 실행하는 함수
+  const runBatchSequences = async () => {
+    try {
+      console.log("일괄 실행 시작");
+      
+      // 일괄 실행할 시퀀스 목록 수집
+      const sequencesToRun = getUniqueSequenceNames().map(name => {
+        const repeatInput = document.getElementById(`repeat-${name}`) as HTMLInputElement;
+        const repeats = parseInt(repeatInput?.value || "1") || 1;
+        return { name, repeats };
+      });
+      
+      console.log(`실행할 시퀀스 목록: ${sequencesToRun.length}개`, sequencesToRun);
+      
+      if (sequencesToRun.length === 0) {
+        toast({
+          title: "실행할 시퀀스 없음",
+          description: "실행할 시퀀스가 없습니다.",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      // 현재 실행 중인 시퀀스들의 정보를 배열로 저장
+      const runningSequencesInfo = [];
+      
+      // 첫 번째 시퀀스 실행
+      const firstSequence = sequencesToRun[0];
+      const result = runSavedSequence(firstSequence.name, firstSequence.repeats);
+      
+      if (result) {
+        // 성공적으로 실행된 시퀀스 정보 저장
+        runningSequencesInfo.push(firstSequence.name);
+        localStorage.setItem('batchRunningSequences', JSON.stringify(runningSequencesInfo));
+        localStorage.setItem('pendingBatchSequences', JSON.stringify(sequencesToRun.slice(1)));
+        
+        // 토스트 메시지 표시
+        toast({
+          title: "일괄 실행 시작",
+          description: `'${firstSequence.name}' 시퀀스 실행 시작, 총 ${sequencesToRun.length}개 시퀀스 예약됨`,
+        });
+      }
+    } catch (error) {
+      console.error("일괄 실행 중 오류:", error);
+      toast({
+        title: "일괄 실행 오류",
+        description: `일괄 실행 중 오류가 발생했습니다: ${error}`,
+        variant: "destructive"
+      });
+    }
+  };
+
+  // MQTT 메시지 핸들러에 배치 실행 기능 추가
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    const handleSequenceCompletion = (topic: string, message: Buffer) => {
+      const messageStr = message.toString();
+      
+      // 시퀀스 완료 감지 (완료 또는 중단)
+      if ((topic === EXTRACTION_OUTPUT_TOPIC && 
+          (messageStr.includes("공정 종료") || messageStr.includes("완료") || messageStr.includes("중단"))) ||
+          (topic === PROCESS_PROGRESS_TOPIC && 
+          (messageStr.includes("completed") || messageStr.includes("stopped")))) {
+        
+        console.log("시퀀스 완료 감지:", messageStr);
+        
+        // 대기 중인 배치 시퀀스가 있는지 확인
+        const pendingSequencesStr = localStorage.getItem('pendingBatchSequences');
+        
+        if (pendingSequencesStr) {
+          try {
+            const pendingSequences = JSON.parse(pendingSequencesStr);
+            
+            if (pendingSequences.length > 0) {
+              console.log(`다음 시퀀스 실행, 남은 시퀀스: ${pendingSequences.length}개`);
+              
+              // 현재 완료된 시퀀스 정보 초기화
+              const currentRunningSequence = localStorage.getItem('currentRunningSequence');
+              if (currentRunningSequence) {
+                saveRunningSequenceInfo(currentRunningSequence, false);
+                localStorage.removeItem('currentRunningSequence');
+              }
+              
+              // 다음 시퀀스 실행
+              const nextSequence = pendingSequences[0];
+              const remainingSequences = pendingSequences.slice(1);
+              
+              // 잠시 대기 후 다음 시퀀스 실행 (시스템이 안정화되도록)
+              setTimeout(() => {
+                const result = runSavedSequence(nextSequence.name, nextSequence.repeats);
+                
+                if (result) {
+                  // 성공적으로 실행된 경우 대기 목록 업데이트
+                  localStorage.setItem('pendingBatchSequences', JSON.stringify(remainingSequences));
+                  
+                  // 현재 실행 중인 배치 시퀀스 목록 업데이트
+                  const runningBatchSequences = JSON.parse(localStorage.getItem('batchRunningSequences') || '[]');
+                  runningBatchSequences.push(nextSequence.name);
+                  localStorage.setItem('batchRunningSequences', JSON.stringify(runningBatchSequences));
+                  
+                  console.log(`'${nextSequence.name}' 시퀀스 실행 시작, 남은 시퀀스: ${remainingSequences.length}개`);
+                } else {
+                  console.error(`'${nextSequence.name}' 시퀀스 실행 실패`);
+                  
+                  // 실패한 경우에도 나머지 시퀀스 계속 실행
+                  if (remainingSequences.length > 0) {
+                    localStorage.setItem('pendingBatchSequences', JSON.stringify(remainingSequences));
+                    // 다음 시퀀스 실행을 시도하기 위해 완료 이벤트 트리거
+                    setTimeout(() => {
+                      mqttClient.publish(PROCESS_PROGRESS_TOPIC, JSON.stringify({ status: 'completed' }));
+                    }, 500);
+                  } else {
+                    // 더 이상 실행할 시퀀스가 없으면 배치 실행 정보 초기화
+                    localStorage.removeItem('pendingBatchSequences');
+                    localStorage.removeItem('batchRunningSequences');
+                    
+                    toast({
+                      title: "일괄 실행 완료",
+                      description: "모든 시퀀스 실행이 완료되었습니다.",
+                    });
+                  }
+                }
+              }, 1000); // 1초 대기 후 다음 시퀀스 실행
+            } else {
+              // 더 이상 실행할 시퀀스가 없으면 배치 실행 정보 초기화
+              localStorage.removeItem('pendingBatchSequences');
+              localStorage.removeItem('batchRunningSequences');
+              
+              toast({
+                title: "일괄 실행 완료",
+                description: "모든 시퀀스 실행이 완료되었습니다.",
+              });
+            }
+          } catch (error) {
+            console.error("배치 시퀀스 처리 중 오류:", error);
+            localStorage.removeItem('pendingBatchSequences');
+            localStorage.removeItem('batchRunningSequences');
+          }
+        }
+      }
+    };
+    
+    // 메시지 핸들러 등록
+    mqttClient.on('message', handleSequenceCompletion);
+    
+    return () => {
+      mqttClient.off('message', handleSequenceCompletion);
+    };
+  }, [mqttClient, runSavedSequence]);
+
+  return (
+    <div className="space-y-6">
+      <Tabs defaultValue="tanks">
+        <TabsList>
+          <TabsTrigger value="tanks">탱크 시스템</TabsTrigger>
+          <TabsTrigger value="automation">자동화 공정</TabsTrigger>
+          <TabsTrigger value="worklog">작업 로그북</TabsTrigger>
+        </TabsList>
+        <TabsContent value="tanks">
+          <div className="space-y-6">
+            {/* MQTT 메시지 및 펌프 제어 섹션 */}
+            <Card>
+              <CardHeader>
+                <CardTitle>MQTT 제어</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {/* MQTT 메시지 전송 폼 */}
+                <form onSubmit={handleFormSubmit} className="space-y-4">
+                  <div className="flex flex-col space-y-2">
+                    <label htmlFor="topic" className="text-sm font-medium">토픽</label>
+                    <div className="flex space-x-2">
+                      <Input
+                        id="topic"
+                        placeholder="extwork/valve/input"
+                        value={topic}
+                        onChange={(e) => setTopic(e.target.value)}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setTopic(VALVE_INPUT_TOPIC)}
+                      >
+                        밸브
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col space-y-2">
+                    <label htmlFor="message" className="text-sm font-medium">메시지</label>
+                    <Textarea
+                      id="message"
+                      placeholder="1000"
+                      value={message}
+                      onChange={(e) => setMessage(e.target.value)}
+                      className="h-24"
+                    />
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <div className="flex space-x-2">
+                      <Button type="submit" variant="default">발행</Button>
+                    </div>
+                    <Badge variant={mqttStatus === "연결됨" ? "default" : "destructive"}>
+                      MQTT: {mqttStatus}
+                    </Badge>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+
+            {/* 작업목록 섹션 */}
+            <Card className="h-full">
+              <CardHeader>
+                <CardTitle className="flex justify-between items-center">
+                  <span>작업목록 (extwork)</span>
+                  <div className="flex items-center space-x-2">
+                    <Button 
+                      variant="outline"
+                      size="sm" 
+                      onClick={() => setIsEditMode(!isEditMode)}
+                    >
+                      {isEditMode ? '수정 완료' : '작업 수정'}
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={runBatchSequences}
+                    >
+                      일괄 실행
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearServerSequences}
+                    >
+                      서버 데이터 삭제
+                    </Button>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-2 px-2 font-medium">번호</th>
+                        <th className="text-left py-2 px-2 font-medium">이름</th>
+                        <th className="text-center py-2 px-2 font-medium">횟수</th>
+                        <th className="text-right py-2 px-2 font-medium">작업</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getUniqueSequenceNames().map((name, index) => {
+                        const sequenceCount = savedSequences.filter(seq => seq.name === name).length;
+                        const firstSequence = savedSequences.find(seq => seq.name === name);
+                        const modeDescription = firstSequence ? 
+                          `${Math.floor(firstSequence.operation_mode / 10) === 1 ? '동시' : 
+                            Math.floor(firstSequence.operation_mode / 10) === 2 ? '순차' : '중첩'} + 
+                           ${firstSequence.operation_mode % 10 === 1 ? '추출순환' : 
+                             firstSequence.operation_mode % 10 === 2 ? '전체순환' : '본탱크수집'}` : '';
+                        
+                        return (
+                          <tr key={name} className={`border-b hover:bg-slate-50 ${isEditMode ? 'bg-blue-50' : ''}`}>
+                            <td className="py-2 px-2">
+                              {isEditMode ? (
+                                <div className="flex flex-col gap-1">
+                      <Button 
+                                          variant="ghost" 
+                        size="sm" 
+                                          className="h-6 w-6 p-0"
+                                          onClick={() => moveSequence(name, 'up')}
+                                          disabled={index === 0}
+                      >
+                                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" />
+                                          </svg>
+                      </Button>
+                                        <span className="text-center">{index + 1}</span>
+                      <Button 
+                                          variant="ghost" 
+                        size="sm" 
+                                          className="h-6 w-6 p-0"
+                                          onClick={() => moveSequence(name, 'down')}
+                                          disabled={index === getUniqueSequenceNames().length - 1}
+                                        >
+                                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                                          </svg>
+                      </Button>
+                    </div>
+                                    ) : (
+                                      index + 1
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-2 font-medium">
+                                    {editingSequence === name ? (
+                                      <Input 
+                                        className="h-8 text-sm"
+                                        defaultValue={name}
+                                        onBlur={(e) => updateSequenceDescription(name, e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            updateSequenceDescription(name, e.currentTarget.value);
+                                          } else if (e.key === 'Escape') {
+                                            setEditingSequence(null);
+                                          }
+                                        }}
+                                        autoFocus
+                                      />
+                                    ) : (
+                  <div>
+                                        <span 
+                                          className={isEditMode ? "cursor-pointer hover:underline" : ""}
+                                          onClick={() => isEditMode && setEditingSequence(name)}
+                                        >
+                                          {name}
+                                        </span>
+                                        <div className="text-xs text-gray-500 mt-1">
+                                          {modeDescription} ({sequenceCount}개)
+                                        </div>
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-2">
+                                    <div className="flex items-center justify-center">
+                                      <input 
+                                        type="number" 
+                                        className="w-14 p-1 text-xs border border-gray-300 rounded text-center"
+                                        min="1"
+                                        max="100"
+                                        defaultValue="1"
+                                        id={`repeat-${name}`}
+                    />
+                  </div>
+                                  </td>
+                                  <td className="py-2 px-2">
+                                    <div className="flex justify-end gap-1">
+                                      {!isEditMode && (
+                                        <Button 
+                                          variant="default" 
+                                          size="sm"
+                                          className={`h-7 px-2 ${workInProgress[name] ? 'bg-red-500 hover:bg-red-600' : ''}`}
+                                          onClick={() => {
+                                            // 이미 진행 중인 경우 실행하지 않음
+                                            if (workInProgress[name]) return;
+                                            
+                                            const repeatInput = document.getElementById(`repeat-${name}`) as HTMLInputElement;
+                                            const repeats = parseInt(repeatInput.value) || 1;
+                                            // 반복 횟수 설정 후 실행
+                                            const filteredSequences = savedSequences
+                                              .filter(seq => seq.name === name)
+                                              .map(seq => {
+                                                // 필요한 필드만 포함하여 새 객체 생성
+                                                const cleanedSeq = {
+                                                  operation_mode: seq.operation_mode,
+                                                  repeats: repeats,
+                                                  process: seq.process
+                                                };
+                                                
+                                                // wait_time이 있는 경우에만 추가
+                                                if (seq.wait_time) {
+                                                  (cleanedSeq as any).wait_time = seq.wait_time;
+                                                }
+                                                
+                                                return cleanedSeq;
+                                              });
+                                            
+                                            if (filteredSequences.length > 0 && mqttClient) {
+                                              // 시퀀스를 MQTT 메시지로 직접 발행
+                                              const sequence = { sequences: filteredSequences };
+                                              const topic = "extwork/extraction/input";
+                                              
+                                              // 필드 순서 재정렬 및 process 배열 형식 개선
+                                              const formattedSequences = sequence.sequences.map(seq => {
+                                                const firstDigit = Math.floor(seq.operation_mode / 10);
+                                                
+                                                // 기본 객체 구조 (필드 순서 조정)
+                                                const formattedSeq: any = {
+                                                  operation_mode: seq.operation_mode,
+                                                  repeats: seq.repeats,
+                                                  process: [...seq.process]
+                                                };
+                                                
+                                                // 순차 모드가 아닌 경우에만 wait_time 추가
+                                                if (firstDigit !== 2 && (seq as any).wait_time !== undefined) {
+                                                  formattedSeq.wait_time = (seq as any).wait_time;
+                                                }
+                                                
+                                                return formattedSeq;
+                                              });
+                                              
+                                              const formattedSequence = { sequences: formattedSequences };
+                                              
+                                              // 모드별 포맷팅을 위한 JSON 문자열 생성
+                                              let message = JSON.stringify(formattedSequence, null, 2);
+                                              
+                                              // 동시 모드: process 배열을 한 줄로 표시
+                                              message = message.replace(/"process": \[\s+([^]*?)\s+\]/g, (match, processContent) => {
+                                                const firstDigit = formattedSequences[0] ? Math.floor(formattedSequences[0].operation_mode / 10) : 0;
+                                                
+                                                if (firstDigit === 1) { // 동시 모드
+                                                  // 배열 내용을 한 줄로 압축
+                                                  const compactProcess = processContent.replace(/\s+/g, ' ').trim();
+                                                  return `"process": [ ${compactProcess} ]`;
+                                                } else if (firstDigit === 2) { // 순차 모드
+                                                  // 3개씩 그룹화하여 줄바꿈
+                                                  const values = processContent.match(/\d+/g) || [];
+                                                  let formattedProcess = '';
+                                                  
+                                                  for (let i = 0; i < values.length; i += 3) {
+                                                    if (i > 0) formattedProcess += ',\n        ';
+                                                    const group = values.slice(i, i + 3);
+                                                    formattedProcess += group.join(', ');
+                                                  }
+                                                  
+                                                  return `"process": [\n        ${formattedProcess}\n      ]`;
+                                                } else if (firstDigit === 3) { // 중첩 모드
+                                                  // 2개씩 그룹화하여 줄바꿈
+                                                  const values = processContent.match(/\d+/g) || [];
+                                                  let formattedProcess = '';
+                                                  
+                                                  for (let i = 0; i < values.length; i += 2) {
+                                                    if (i > 0) formattedProcess += ',\n        ';
+                                                    const group = values.slice(i, i + 2);
+                                                    formattedProcess += group.join(', ');
+                                                  }
+                                                  
+                                                  return `"process": [\n        ${formattedProcess}\n      ]`;
+                                                }
+                                                
+                                                return match; // 기본값은 원래 형식 유지
+                                              });
+                                              
+                                              try {
+                                                mqttClient.publish(topic, message);
+                                                
+                                                // 현재 실행 중인 시퀀스 이름 저장
+                                                localStorage.setItem('currentRunningSequence', name);
+                                                
+                                                // 실행 로그 남기기
+                                                setProgressMessages(prev => [{
+                                                  timestamp: Date.now(),
+                                                  message: `시퀀스 '${name}' 실행 (${repeats}회)`,
+                                                  rawJson: message
+                                                }, ...prev]);
+                                                
+                                                // 작업 로그 생성 및 저장
+                                                const firstSequence = filteredSequences[0];
+                                                
+                                                // 작업 세부 내용 생성
+                                                const processDetails = filteredSequences.map((seq, index) => {
+                                                  // 원본 시퀀스에서 selectedPumps 정보 가져오기
+                                                  const originalSeq = savedSequences.find(s => 
+                                                    s.name === name && 
+                                                    s.operation_mode === seq.operation_mode
+                                                  );
+                                                  
+                                                  const pumpInfo = originalSeq && originalSeq.selectedPumps
+                                                    ? originalSeq.selectedPumps
+                                                        .map((selected, idx) => selected ? idx + 1 : null)
+                                                        .filter(idx => idx !== null)
+                                                        .join(', ')
+                                                    : '없음';
+                                                    
+                                                  return `시퀀스 ${index + 1}: 모드 ${seq.operation_mode}, 반복 ${seq.repeats}회, 펌프 ${pumpInfo}`;
+                                                });
+                                                
+                                                // 원본 시퀀스에서 selectedPumps 정보 가져오기
+                                                const originalFirstSeq = savedSequences.find(s => 
+                                                  s.name === name && 
+                                                  s.operation_mode === firstSequence.operation_mode
+                                                );
+                                                
+                                                const workLog = workLogService.createWorkLog(
+                                                  name,
+                                                  firstSequence.operation_mode,
+                                                  repeats,
+                                                  originalFirstSeq ? originalFirstSeq.selectedPumps : undefined
+                                                );
+                                                
+                                                // 작업 세부 내용 추가
+                                                workLog.tags = processDetails;
+                                                
+                                                workLogService.saveWorkLog(workLog).then(() => {
+                                                  setCurrentWorkLogId(workLog.id);
+                                                  loadWorkLogs(); // 로그 목록 새로고침
+                                                });
+                                                
+                                                console.log("발행된 JSON:", message);
+                                              } catch (error) {
+                                                console.error("MQTT 발행 오류:", error);
+                                                alert(`MQTT 발행 중 오류가 발생했습니다: ${error}`);
+                                              }
+                                            } else {
+                                              alert('MQTT 클라이언트가 연결되지 않았거나 시퀀스를 찾을 수 없습니다.');
+                                            }
+                                          }}
+                                        >
+                                          {workInProgress[name] ? '진행중' : '진행'}
+                                        </Button>
+                                      )}
+                      <Button 
+                                        variant="destructive" 
+                        size="sm"
+                                        className="h-7 px-2"
+                                        onClick={() => deleteSavedSequence(name)}
+                      >
+                                        삭제
+                      </Button>
+                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                    </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="automation" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>자동화 공정</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <AutomationProcess 
+                mqttClient={mqttClient} 
+                savedSequences={savedSequences}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="worklog" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex justify-between items-center">
+                <span>작업 로그북</span>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={clearWorkLogs}
+                >
+                  작업목록 서버 데이터 삭제
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <WorkLogBook 
+                workLogs={workLogsData.logs.filter((log, index, self) => 
+                  // 중복 ID 필터링 - 같은 ID가 있는 경우 첫 번째 항목만 유지
+                  index === self.findIndex(l => l.id === log.id)
+                )}
+                onClearLogs={clearWorkLogs}
+                onRefreshLogs={loadWorkLogs}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+} 

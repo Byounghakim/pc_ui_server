@@ -1,0 +1,60 @@
+{
+  "mainTank": {
+    "level": 0,
+    "status": "empty"
+  },
+  "tanks": [
+    {
+      "id": 1,
+      "level": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 1
+    },
+    {
+      "id": 2,
+      "level": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 2
+    },
+    {
+      "id": 3,
+      "level": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 3
+    },
+    {
+      "id": 4,
+      "level": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 4
+    },
+    {
+      "id": 5,
+      "level": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 5
+    },
+    {
+      "id": 6,
+      "level": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 6
+    }
+  ],
+  "valveState": "현재 밸브 상태: valveA=OFF(전체순환_교환), valveB=ON(열림), valveC=OFF(-), valveD=OFF(-)",
+  "valveStatusMessage": "현재 밸브 상태: valveA=OFF(전체순환_교환), valveB=ON(열림), valveC=OFF(-), valveD=OFF(-)",
+  "valveADesc": "전체순환_교환",
+  "valveBDesc": "열림",
+  "progressInfo": {
+    "step": "",
+    "elapsedTime": "00:00:00",
+    "remainingTime": "00:00:00",
+    "totalRemainingTime": "00:00:00"
+  }
+}

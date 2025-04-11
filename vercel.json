@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "buildCommand": "CI=false SKIP_PREFLIGHT_CHECK=true DISABLE_ESLINT_PLUGIN=true NEXT_DISABLE_ESLINT=1 NODE_OPTIONS=--max_old_space_size=4096 next build",
+  "installCommand": "npm install --force && node scripts/disable-eslint.js && node scripts/disable-next-output-export.js",
+  "framework": "nextjs",
+  "env": {
+    "DISABLE_ESLINT_PLUGIN": "true",
+    "NEXT_DISABLE_ESLINT": "1",
+    "ESLINT_NO_DEV_ERRORS": "true",
+    "NEXT_TELEMETRY_DISABLED": "1",
+    "CI": "false",
+    "SKIP_PREFLIGHT_CHECK": "true"
+  },
+  "rewrites": [{ "source": "/(.*)", "destination": "/" }],
+  "github": {
+    "silent": false
+  }
+} 

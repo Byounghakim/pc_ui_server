@@ -1,0 +1,3109 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import MqttClient from '@/lib/mqtt-client';
+import { 
+  EXTRACTION_INPUT_TOPIC, 
+  EXTRACTION_OUTPUT_TOPIC, 
+  PROCESS_PROGRESS_TOPIC,
+  AUTOMATION_CONTROL_TOPIC,
+  AUTOMATION_STATUS_TOPIC,
+  ERROR_TOPIC,
+  QUEUE_STATUS_TOPIC
+} from '@/lib/mqtt-topics';
+import { Checkbox } from "@/app/components/ui/checkbox";
+import { X, Play, Square, RotateCcw, ArrowUp, ArrowDown, PlusCircle, Trash2 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { PumpSequence } from '../types/index';
+import workLogService from '../services/work-log-service';
+import { ScrollArea } from "@/app/components/ui/scroll-area";
+import { Separator } from "@/app/components/ui/separator";
+import { Input } from '@/components/ui/input';
+import { v4 as uuidv4 } from 'uuid';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogClose } from "@/app/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogCancel, AlertDialogAction } from "@/app/components/ui/alert-dialog";
+import { toast } from "@/app/components/ui/use-toast";
+
+// 로컬 스토리지 키
+const AUTOMATION_STATE_KEY = 'automation-process-state';
+const AUTOMATION_SEQUENCES_KEY = 'automation-process-sequences';
+
+type AutomationStatus = 'waiting' | 'running' | 'paused' | 'stopped' | 'completed' | 'error';
+type SequenceStatus = 'waiting' | 'running' | 'completed' | 'error';
+
+// 큐 아이템 인터페이스 정의
+interface QueueItem {
+  id: string;
+  name: string;
+  timestamp: number;
+  data: any;
+}
+
+// 큐 상태 인터페이스 정의
+interface QueueStatus {
+  isProcessing: boolean;
+  count: number;
+  items?: QueueItem[];
+}
+
+interface SequenceWithStatus {
+  id: string;
+  sequence: PumpSequence;
+  status: SequenceStatus;
+  waitTime: number;
+  customRepeats: number;
+  startTime?: number;
+  endTime?: number;
+  errorDetails?: string;
+}
+
+interface SavedProcess {
+  id: string;
+  name: string;
+  description?: string;
+  sequences: SequenceWithStatus[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AutomationProcessProps {
+  mqttClient: MqttClient | null;
+  savedSequences: PumpSequence[];
+  onLockChange?: (locked: boolean) => void; // 자동화 공정 잠금 상태 변경 콜백
+}
+
+// 대기 중인 업데이트 타입 정의
+interface PendingUpdate {
+  type: string;
+  data: any;
+}
+
+// 시퀀스 JSON 형식 표준화 함수
+const standardizeSequenceJson = (sequence: any): any => {
+  // operation_mode 유효성 검사 및 표준화
+  let operationMode = sequence.operation_mode;
+  const firstDigit = Math.floor(operationMode / 10);
+  
+  // 첫 번째 자리가 1인 경우 (동시 모드) -> 12로 표준화
+  if (firstDigit === 1) {
+    operationMode = 12;
+  } 
+  // 첫 번째 자리가 2인 경우 (순차 모드) -> 22로 표준화
+  else if (firstDigit === 2) {
+    operationMode = 22;
+  }
+  // 그 외의 경우 기본값 30 (혼합 모드)로 설정
+  else if (firstDigit !== 3) {
+    operationMode = 30;
+  }
+  
+  // 프로세스 배열 표준화
+  let processArray = [...sequence.process];
+  
+  // 프로세스 배열에 유효하지 않은 값(7, 8, 9)이 있으면 유효한 값(0, 5, 6, 10)으로 변환
+  processArray = processArray.map((value: number) => {
+    if (value === 7 || value === 8 || value === 9) {
+      return 6; // 유효한 값으로 대체
+    }
+    return value;
+  });
+  
+  // 모드별로 적절한 process 배열 길이와 패턴 확보
+  if (operationMode === 12) { // 동시 모드
+    // 프로세스 길이가 6의 배수가 되도록 조정
+    while (processArray.length % 6 !== 0) {
+      processArray.push(0);
+    }
+  } else if (operationMode === 22) { // 순차 모드
+    // 프로세스 길이가 3의 배수가 되도록 조정
+    while (processArray.length % 3 !== 0) {
+      processArray.push(0);
+    }
+    
+    // 각 그룹이 [6, 5, 0] 패턴으로 표준화
+    const standardizedProcess = [];
+    for (let i = 0; i < processArray.length; i += 3) {
+      standardizedProcess.push(6);
+      standardizedProcess.push(5);
+      standardizedProcess.push(0);
+    }
+    processArray = standardizedProcess;
+  } else if (operationMode === 30) { // 혼합 모드
+    // 프로세스 길이가 짝수가 되도록 조정
+    if (processArray.length % 2 !== 0) {
+      processArray.push(0);
+    }
+    
+    // 교차 패턴(10, 5, ...)으로 표준화
+    const standardizedProcess = [];
+    for (let i = 0; i < processArray.length; i += 2) {
+      standardizedProcess.push(10);
+      standardizedProcess.push(5);
+    }
+    processArray = standardizedProcess;
+  }
+  
+  // 표준화된 시퀀스 객체 생성
+  const standardizedSeq: any = {
+    ...sequence,
+    operation_mode: operationMode,
+    process: processArray
+  };
+  
+  // wait_time은 operation_mode가 22(순차 모드)가 아닌 경우에만 추가
+  if (operationMode === 22) {
+    delete standardizedSeq.wait_time;
+  }
+  
+  return standardizedSeq;
+};
+
+// debounce 함수를 개선하여 cancel 메서드 추가
+const debounce = (func: Function, wait: number) => {
+  let timeout: NodeJS.Timeout | null = null;
+  
+  const debounced = (...args: any[]) => {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      func(...args);
+    }, wait);
+  };
+  
+  // cancel 메서드 추가
+  (debounced as any).cancel = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = null;
+    }
+  };
+  
+  return debounced;
+};
+
+const AutomationProcess: React.FC<AutomationProcessProps> = ({ 
+  mqttClient, 
+  savedSequences,
+  onLockChange 
+}) => {
+  // 중요 상태 Ref
+  const processingAction = useRef<boolean>(false);
+  const pendingUpdates = useRef<PendingUpdate[]>([]);
+  const prevStatus = useRef<AutomationStatus>('waiting');
+  const initialStateLoaded = useRef<boolean>(false);
+
+  // 시간 관련 상태
+  const [tempHours, setTempHours] = useState(0);
+  const [tempMinutes, setTempMinutes] = useState(0);
+  const [tempSeconds, setTempSeconds] = useState(0);
+
+  const [status, setStatus] = useState<AutomationStatus>('waiting');
+  const [selectedSequences, setSelectedSequences] = useState<SequenceWithStatus[]>([]);
+  const [availableSequences, setAvailableSequences] = useState<string[]>([]);
+  const [selectedSequenceName, setSelectedSequenceName] = useState<string>('');
+  const [currentSequenceIndex, setCurrentSequenceIndex] = useState<number>(-1);
+  const [logs, setLogs] = useState<{id: string; message: string; timestamp: number; type: string}[]>([]);
+  const [logMessages, setLogMessages] = useState<string[]>([]);
+  const [progress, setProgress] = useState<string>('진행 상태 메시지가 여기에 표시됩니다.');
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [queueStatus, setQueueStatus] = useState<QueueStatus>({ 
+    isProcessing: false, 
+    count: 0 
+  });
+  const [waitingCountdowns, setWaitingCountdowns] = useState<{[key: number]: number}>({});
+  const [showTimePopup, setShowTimePopup] = useState<number | null>(null);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showLoadDialog, setShowLoadDialog] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [processName, setProcessName] = useState('');
+  const [processDescription, setProcessDescription] = useState('');
+  const [savedProcesses, setSavedProcesses] = useState<SavedProcess[]>([]);
+  const [selectedProcessId, setSelectedProcessId] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [manualCommand, setManualCommand] = useState('');
+  const [showManualCommandDialog, setShowManualCommandDialog] = useState(false);
+  const [countdownIntervals, setCountdownIntervals] = useState<{[key: string]: NodeJS.Timeout}>({});
+  
+  // 추가 변수 정의
+  const [currentSequenceId, setCurrentSequenceId] = useState('');
+  const [serverBusy, setServerBusy] = useState(false);
+  const processingRef = useRef<boolean>(false);
+  const countdownTimersRef = useRef<{[key: string]: NodeJS.Timeout}>({});
+  
+  // 상태 변경 최적화 함수
+  const safeUpdateState = <T extends unknown>(
+    stateSetter: React.Dispatch<React.SetStateAction<T>>,
+    value: T | ((prev: T) => T),
+    stateType: string
+  ) => {
+    if (processingAction.current) {
+      // 처리 중일 때는 업데이트를 대기열에 넣음
+      pendingUpdates.current.push({ type: stateType, data: value });
+      return;
+    }
+    
+    stateSetter(value);
+  };
+  
+  // 대기 중인 상태 업데이트 처리
+  const processPendingUpdates = useCallback(() => {
+    if (pendingUpdates.current.length === 0) return;
+    
+    processingAction.current = true;
+    
+    // 각 업데이트 유형별로 마지막 항목만 적용
+    const uniqueUpdates = pendingUpdates.current.reduce((acc, update) => {
+      acc[update.type] = update.data;
+      return acc;
+    }, {} as Record<string, any>);
+    
+    // 업데이트 적용
+    Object.entries(uniqueUpdates).forEach(([type, data]) => {
+      switch (type) {
+        case 'status':
+          setStatus(typeof data === 'function' ? data(status) : data);
+          break;
+        case 'selectedSequences':
+          setSelectedSequences(typeof data === 'function' ? data(selectedSequences) : data);
+          break;
+        case 'currentSequenceIndex':
+          setCurrentSequenceIndex(typeof data === 'function' ? data(currentSequenceIndex) : data);
+          break;
+        case 'logs':
+          setLogs(typeof data === 'function' ? data(logs) : data);
+          break;
+        case 'queueItems':
+          setQueueItems(typeof data === 'function' ? data(queueItems) : data);
+          break;
+        case 'queueStatus':
+          setQueueStatus(typeof data === 'function' ? data(queueStatus) : data);
+          break;
+        default:
+          break;
+      }
+    });
+    
+    pendingUpdates.current = [];
+    processingAction.current = false;
+  }, [status, selectedSequences, currentSequenceIndex, logs, queueItems, queueStatus]);
+  
+  // 주기적으로 대기 중인 업데이트 처리
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!processingAction.current && pendingUpdates.current.length > 0) {
+        processPendingUpdates();
+      }
+    }, 50); // 50ms 간격으로 확인
+    
+    return () => clearInterval(interval);
+  }, [processPendingUpdates]);
+
+  // 상태 변경 시 처리 최적화
+  useEffect(() => {
+    if (prevStatus.current !== status) {
+      prevStatus.current = status;
+      
+      // 상태 변경 시 자동화 공정 잠금 상태 업데이트
+      if (onLockChange) {
+        onLockChange(status === 'running' || status === 'paused');
+      }
+      
+      // 로컬 스토리지에 상태 저장
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(AUTOMATION_STATE_KEY, JSON.stringify({
+            status,
+            currentSequenceIndex,
+            selectedSequences
+          }));
+        } catch (error) {
+          console.error('상태 저장 중 오류:', error);
+        }
+      }
+    }
+  }, [status, currentSequenceIndex, selectedSequences, onLockChange]);
+
+  // MQTT 메시지 핸들러 최적화 - 디바운스 적용
+  const debouncedHandleMessage = useCallback(
+    debounce((topic: string, message: Buffer) => {
+      try {
+        // 기존 handleMessage 코드 내용 유지
+        // ...
+      } catch (error) {
+        console.error('MQTT 메시지 처리 중 오류:', error);
+      }
+    }, 50), // 50ms 디바운스
+    []
+  );
+
+  // updateSequenceStatus 최적화
+  const updateSequenceStatus = (index: number, newStatus: SequenceStatus) => {
+    if (index < 0 || index >= selectedSequences.length) return;
+    
+    processingAction.current = true;
+    setSelectedSequences(prev => {
+      const updated = [...prev];
+      updated[index] = {
+        ...updated[index],
+        status: newStatus,
+        ...(newStatus === 'running' && { startTime: Date.now() }),
+        ...(newStatus === 'completed' && { endTime: Date.now() })
+      };
+      return updated;
+    });
+    processingAction.current = false;
+  };
+
+  // addSequence 최적화
+  const addSequence = (sequenceName: string) => {
+    const sequence = savedSequences.find(seq => seq.name === sequenceName);
+    if (!sequence) return;
+    
+    processingAction.current = true;
+    setSelectedSequences(prev => [
+      ...prev,
+      {
+        id: uuidv4(),
+        sequence,
+        status: 'waiting',
+        waitTime: 0,
+        customRepeats: sequence.repeats || 1
+      }
+    ]);
+    processingAction.current = false;
+  };
+
+  // fullReset 함수 최적화
+  const fullResetOptimized = () => {
+    // 여러 상태 변경 작업 전에 처리 중 플래그 설정
+    processingAction.current = true;
+    
+    // 실행 중인 카운트다운 타이머가 있으면 모두 정리
+    Object.values(countdownIntervals).forEach(interval => {
+      clearInterval(interval);
+    });
+    
+    // 상태 초기화
+    setStatus('waiting');
+    setSelectedSequences([]);
+    setCurrentSequenceIndex(-1);
+    setLogs([]);
+    setWaitingCountdowns({});
+    setShowTimePopup(null);
+    setTempHours(0);
+    setTempMinutes(0);
+    setTempSeconds(0);
+    setCountdownIntervals({});
+    
+    // 로컬 스토리지 데이터 삭제
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(AUTOMATION_STATE_KEY);
+        localStorage.removeItem(AUTOMATION_SEQUENCES_KEY);
+      } catch (error) {
+        console.error('로컬 스토리지 데이터 삭제 중 오류:', error);
+      }
+    }
+    
+    // 큐 상태 초기화
+    if (mqttClient) {
+      try {
+        // 큐 초기화 메시지 발행
+        mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+          action: 'clear_all'
+        }));
+      } catch (error) {
+        console.error('MQTT 메시지 발행 중 오류:', error);
+      }
+    }
+    
+    // 처리 완료
+    processingAction.current = false;
+    
+    // 초기화 완료 알림
+    toast({
+      title: "초기화 완료",
+      description: "모든 상태가 초기화되었습니다.",
+    });
+  };
+  
+  // 시퀀스 추가/삭제 최적화 - 로컬 스토리지 저장 디바운스
+  const debouncedSaveSequences = useCallback(
+    debounce((sequences: SequenceWithStatus[]) => {
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(AUTOMATION_SEQUENCES_KEY, JSON.stringify(sequences));
+        } catch (error) {
+          console.error('시퀀스 저장 중 오류:', error);
+        }
+      }
+    }, 300), // 300ms 디바운스
+    []
+  );
+  
+  // 선택된 시퀀스 변경 시 로컬 스토리지 업데이트
+  useEffect(() => {
+    debouncedSaveSequences(selectedSequences);
+  }, [selectedSequences, debouncedSaveSequences]);
+  
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    const handleMessage = (topic: string, message: Buffer) => {
+      try {
+        const messageStr = message.toString();
+        
+        // 필수 토픽만 로그에 출력
+        if (topic === EXTRACTION_INPUT_TOPIC) {
+          console.log(`📤 [INPUT] ${messageStr.substring(0, 100)}...`);
+        } 
+        else if (topic === EXTRACTION_OUTPUT_TOPIC) {
+          console.log(`📥 [OUTPUT] ${messageStr}`);
+          // 로그 객체 추가
+          const newLog = {
+            id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            message: `OUTPUT: ${messageStr}`,
+            timestamp: Date.now(),
+            type: 'info' as const
+          };
+          setLogs(prevLogs => [...prevLogs, newLog].slice(-100));
+          
+          // 텍스트 메시지 처리
+          addLog(`상태 메시지 수신: ${messageStr}`, true);
+            
+          // 공정 종료 메시지 감지
+          const isCompletionMessage = messageStr.toLowerCase().includes('공정 종료') || 
+                                    messageStr.toLowerCase().includes('공정종료') ||
+                                    messageStr.includes('디바이스 재부팅 시작');
+          
+          if (isCompletionMessage) {
+            console.log(`🚨 완료 메시지 감지! [${messageStr}]`);
+            
+            // 현재 실행 중인 시퀀스에만 완료 처리 적용
+            if (status === 'running' && currentSequenceIndex >= 0) {
+              // 현재 시퀀스의 상태가 'running'인 경우에만 완료 처리 수행
+              const currentSeq = selectedSequences[currentSequenceIndex];
+              if (currentSeq && currentSeq.status === 'running') {
+                addLog(`시퀀스 ${currentSequenceIndex + 1} 완료 메시지 감지: ${currentSeq.sequence.name}`, true);
+                // 시퀀스 완료 처리
+                handleSequenceCompletion(currentSequenceIndex, 'completed', '공정 종료 메시지 감지');
+              } else {
+                // 이미 완료되었거나 에러 상태인 경우 로그만 남김
+                if (currentSeq) {
+                  addLog(`완료 메시지가 감지되었으나 시퀀스 ${currentSequenceIndex + 1}는 이미 ${currentSeq.status} 상태입니다.`, true);
+                }
+              }
+            } else {
+              addLog(`완료 메시지가 감지되었으나 실행 중인 시퀀스가 없습니다.`, false);
+            }
+          }
+        }
+        else if (topic === PROCESS_PROGRESS_TOPIC) {
+          console.log(`📊 [PROGRESS] ${messageStr}`);
+          
+          // 메시지 크기 제한 처리 (10000자 이상인 경우 축약)
+          let displayMessage = messageStr;
+          if (displayMessage && displayMessage.length > 10000) {
+            console.warn(`진행 상태 메시지가 너무 큽니다: ${displayMessage.length} 바이트. 잘라냅니다.`);
+            displayMessage = displayMessage.substring(0, 10000) + "... (메시지 크기 초과로 잘림)`);
+          }
+          
+          // 진행 상태 메시지 저장
+          setProgress(displayMessage);
+          
+          // 로그 객체 추가
+          const newLog = {
+            id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            message: `PROGRESS: ${displayMessage.substring(0, 100)}${displayMessage.length > 100 ? '...' : ''}`,
+            timestamp: Date.now(),
+            type: 'info' as const
+          };
+          setLogs(prevLogs => [...prevLogs, newLog].slice(-100));
+          
+          // 로그 메시지 추가 (문자열 배열)
+          const logMsg = `[${new Date().toLocaleTimeString()}] 진행 상태: ${displayMessage.substring(0, 50)}${displayMessage.length > 50 ? '...' : ''}`;
+          setLogMessages(prev => [logMsg, ...prev].slice(0, 100));
+          
+          // 진행 상태 데이터 파싱 및 처리 시도
+          try {
+            const data = JSON.parse(messageStr);
+            
+            // 진행 상태 정보를 문자열로 변환하여 progress 상태에 저장
+              setProgress(JSON.stringify(data, null, 2));
+              
+              // 진행 상태가 포함된 메시지인 경우 처리
+              if (data && status === 'running' && currentSequenceIndex >= 0) {
+                const currentSeq = selectedSequences[currentSequenceIndex];
+                
+                // 완료 상태 감지
+                if (data.status === 'completed' && currentSeq && currentSeq.status === 'running') {
+                  handleSequenceCompletion(currentSequenceIndex, 'completed', '진행 상태 완료 감지');
+                }
+                // 오류 상태 감지
+                else if (data.status === 'error' && currentSeq && currentSeq.status === 'running') {
+                  handleSequenceCompletion(currentSequenceIndex, 'error', `오류: ${data.error || '알 수 없는 오류'}`);
+                }
+                // 진행 상태 업데이트
+                else if (data.progress && currentSeq) {
+                  // 진행 상태 업데이트 (로그북에 진행 상태만 기록)
+                  try {
+                    workLogService.saveWorkLog({
+                      id: `progress-${uuidv4()}`,
+                      sequenceName: `[자동화 진행] ${currentSeq.sequence.name}`,
+                      startTime: new Date().toISOString(),
+                      endTime: new Date().toISOString(),
+                      status: 'running' as 'running' | 'completed' | 'error' | 'aborted' | 'warning',
+                      details: JSON.stringify({
+                        progress: data.progress,
+                        currentStep: data.currentStep,
+                        totalSteps: data.totalSteps,
+                        sequenceName: currentSeq.sequence.name,
+                        sequenceIndex: currentSequenceIndex
+                      })
+                    });
+                  addLog(`진행 상태 업데이트: ${data.progress}% (${data.currentStep || '?'}/${data.totalSteps || '?'})`, false);
+                  } catch (logError) {
+                    console.error('진행 상태 로그북 기록 실패:', logError);
+                }
+              }
+            }
+          } catch (parseError) {
+            console.error('진행 상태 메시지 파싱 오류:', parseError);
+            setProgress(`진행 상태 메시지 파싱 오류: ${messageStr}`);
+          }
+        }
+        else if (topic === QUEUE_STATUS_TOPIC) {
+          try {
+            const data = JSON.parse(messageStr);
+            
+            // 데이터 구조 유효성 검사 추가
+            if (data) {
+              const count = data.count !== undefined ? data.count : (data.items ? data.items.length : 0);
+              setQueueStatus({
+                isProcessing: data.isProcessing !== undefined ? data.isProcessing : false,
+                count: count,
+                items: Array.isArray(data.items) ? data.items : []
+              });
+              addLog(`큐 상태 업데이트: ${count}개 항목`);
+            } else {
+              addLog(`큐 상태 데이터 없음`, true);
+            }
+          } catch (error) {
+            console.error('큐 상태 메시지 처리 중 오류:', error);
+            addLog(`큐 상태 파싱 오류: ${error}`, true);
+          }
+        }
+      } catch (error) {
+        console.error('메시지 처리 중 오류:', error);
+      }
+    };
+    
+    // 메시지 핸들러 등록
+    mqttClient.on('message', handleMessage);
+    
+    // 주요 토픽 구독
+    mqttClient.subscribe(PROCESS_PROGRESS_TOPIC);
+    mqttClient.subscribe(EXTRACTION_OUTPUT_TOPIC);
+    mqttClient.subscribe(QUEUE_STATUS_TOPIC);
+    
+    // 컴포넌트 언마운트 시 핸들러 제거
+    return () => {
+      mqttClient.off('message', handleMessage);
+      mqttClient.unsubscribe(PROCESS_PROGRESS_TOPIC);
+      mqttClient.unsubscribe(EXTRACTION_OUTPUT_TOPIC);
+      mqttClient.unsubscribe(QUEUE_STATUS_TOPIC);
+      
+      // 모든 타임아웃 정리
+      Object.values(countdownIntervals).forEach(timeoutId => {
+        clearTimeout(timeoutId);
+      });
+    };
+  }, [mqttClient, currentSequenceIndex, status, selectedSequences, countdownIntervals]);
+  
+  // 시퀀스 제거
+  const removeSequence = (index: number) => {
+    setSelectedSequences(prev => {
+      const updated = [...prev];
+      updated.splice(index, 1);
+      return updated;
+    });
+  };
+  
+  // 시퀀스 위로 이동
+  const moveSequenceUp = (index: number) => {
+    if (index <= 0) return;
+    
+    setSelectedSequences(prev => {
+      const updated = [...prev];
+      const temp = updated[index];
+      updated[index] = updated[index - 1];
+      updated[index - 1] = temp;
+      return updated;
+    });
+  };
+  
+  // 시퀀스 아래로 이동
+  const moveSequenceDown = (index: number) => {
+    if (index >= selectedSequences.length - 1) return;
+    
+    setSelectedSequences(prev => {
+      const updated = [...prev];
+      const temp = updated[index];
+      updated[index] = updated[index + 1];
+      updated[index + 1] = temp;
+      return updated;
+    });
+  };
+  
+  // 대기 시간 변경
+  const handleWaitTimeChange = (index: number, waitTime: number) => {
+    setSelectedSequences(prev => {
+      const updated = [...prev];
+      updated[index] = {...updated[index], waitTime};
+      return updated;
+    });
+  };
+  
+  // 반복 횟수 변경
+  const handleRepeatsChange = (index: number, repeats: number) => {
+    setSelectedSequences(prev => {
+      const updated = [...prev];
+      updated[index] = {...updated[index], customRepeats: repeats};
+      return updated;
+    });
+  };
+  
+  // 시퀀스 복제 기능 추가
+  const duplicateSequence = (index: number) => {
+    const sequenceToDuplicate = selectedSequences[index];
+    setSelectedSequences(prev => [
+      ...prev, 
+      {
+        id: uuidv4(),
+        sequence: {...sequenceToDuplicate.sequence},
+        status: 'waiting' as SequenceStatus,
+        waitTime: sequenceToDuplicate.waitTime,
+        customRepeats: sequenceToDuplicate.customRepeats
+      }
+    ]);
+    addLog(`시퀀스 복제됨: ${sequenceToDuplicate.sequence.name}`);
+  };
+  
+  // 시퀀스 완료 처리 함수
+  const handleSequenceCompletion = (index: number, newStatus: SequenceStatus, details?: string) => {
+    // 시퀀스가 유효한지 확인
+    if (index < 0 || index >= selectedSequences.length) {
+      console.error(`유효하지 않은 시퀀스 인덱스: ${index}`);
+      return;
+    }
+    
+    try {
+      // 이미 완료된 시퀀스는 처리하지 않음
+      const currentSeq = selectedSequences[index];
+      if (currentSeq.status === 'completed' || currentSeq.status === 'error') {
+        console.log(`시퀀스 ${index}(${currentSeq.sequence.name})는 이미 ${currentSeq.status} 상태입니다.`);
+        return;
+      }
+      
+      // 시퀀스 종료 시간 업데이트
+      const endTime = new Date();
+      setSelectedSequences(prev => {
+        const updated = [...prev];
+        updated[index] = {
+          ...updated[index], 
+          status: newStatus, 
+          endTime: endTime.getTime(),
+          errorDetails: newStatus === 'error' ? details : undefined
+        };
+        return updated;
+      });
+      
+      // 로그 추가
+      const statusText = newStatus === 'completed' ? '완료' : newStatus === 'error' ? '오류' : '상태 변경';
+      addLog(`시퀀스 ${index + 1} ${statusText}: ${currentSeq.sequence.name}${details ? ` (${details})` : ''}`, true);
+      
+      // 작업 로그북에 상태 업데이트
+      try {
+        const sequenceId = currentSeq.id;
+        let logStatus: 'running' | 'completed' | 'error' | 'aborted' | 'warning' = 'completed';
+        
+        // 상태에 따른 작업 로그 상태 설정
+        if (newStatus === 'error') {
+          logStatus = 'error';
+        } else if (newStatus === 'completed') {
+          logStatus = 'completed';
+        }
+        
+        // 시작 시간이 없는 경우에는 현재 시간 기준 30초 전으로 설정 (기본값)
+        const startTimeMs = currentSeq.startTime || (endTime.getTime() - 30000);
+        const durationSeconds = Math.round((endTime.getTime() - startTimeMs) / 1000);
+        
+        // 작업 로그북에 완료 기록
+        workLogService.saveWorkLog({
+          id: sequenceId, // 시퀀스 ID를 작업 로그 ID로 사용
+          sequenceName: `[자동화] ${currentSeq.sequence.name}`,
+          startTime: new Date(startTimeMs).toISOString(),
+          endTime: endTime.toISOString(),
+          status: logStatus,
+          details: JSON.stringify({
+            mode: currentSeq.sequence.operation_mode,
+            repeats: currentSeq.customRepeats,
+            process: currentSeq.sequence.process,
+            waitTime: currentSeq.waitTime,
+            sequenceIndex: index,
+            totalSequences: selectedSequences.length,
+            completionDetails: details || '정상 완료',
+            duration: durationSeconds
+          })
+        });
+        
+        console.log(`시퀀스 ${statusText} 작업 로그북 기록 완료: ${currentSeq.sequence.name}, 소요시간: ${durationSeconds}초`);
+      } catch (logError) {
+        console.error('작업 로그북 기록 실패:', logError);
+      }
+      
+      // 다음 시퀀스 실행 여부 결정
+      if (newStatus === 'completed' && index === currentSequenceIndex) {
+        const nextIndex = index + 1;
+        
+        // 다음 시퀀스가 있는지 확인
+        if (nextIndex < selectedSequences.length) {
+          console.log(`다음 시퀀스 ${nextIndex} 실행 준비`);
+          const nextSeq = selectedSequences[nextIndex];
+          
+          // 대기 시간이 있으면 카운트다운 시작
+          if (nextSeq.waitTime > 0) {
+            addLog(`다음 시퀀스 ${nextSeq.waitTime}초 후 시작: ${nextSeq.sequence.name}`);
+            startCountdown(nextIndex, nextSeq.waitTime);
+            
+            const timeoutId = setTimeout(() => {
+              clearCountdown(nextIndex);
+              executeSequence(nextIndex);
+            }, nextSeq.waitTime * 1000);
+            
+            // 타임아웃 ID 저장
+            setCountdownIntervals(prev => ({
+              ...prev,
+              [nextIndex]: timeoutId
+            }));
+          } else {
+            // 대기 시간이 없으면 바로 실행
+            executeSequence(nextIndex);
+          }
+        } else {
+          // 모든 시퀀스 완료
+          setStatus('completed');
+          setCurrentSequenceIndex(-1);
+          addLog("모든 시퀀스 처리 완료", true);
+          
+          // 전체 자동화 공정 완료 시간 계산
+          const automationEndTime = new Date();
+          const firstSeq = selectedSequences[0];
+          const automationStartTime = firstSeq.startTime ? new Date(firstSeq.startTime) : new Date(automationEndTime.getTime() - 60000);
+          const totalDurationSeconds = Math.round((automationEndTime.getTime() - automationStartTime.getTime()) / 1000);
+          
+          // 작업 로그북에 완료 기록
+          try {
+            workLogService.saveWorkLog({
+              id: uuidv4(),
+              sequenceName: `[자동화] 모든 시퀀스 처리 완료`,
+              startTime: automationStartTime.toISOString(),
+              endTime: automationEndTime.toISOString(),
+              status: 'completed' as 'running' | 'completed' | 'error' | 'aborted' | 'warning',
+              details: JSON.stringify({
+                totalSequences: selectedSequences.length,
+                totalDuration: totalDurationSeconds,
+                sequences: selectedSequences.map(seq => ({
+                  name: seq.sequence.name,
+                  status: seq.status,
+                  duration: seq.startTime && seq.endTime ? Math.round((seq.endTime - seq.startTime) / 1000) : undefined
+                }))
+              })
+            });
+            
+            console.log(`자동화 공정 완료 기록 저장 완료. 총 소요시간: ${totalDurationSeconds}초`);
+          } catch (logError) {
+            console.error('자동화 공정 완료 로그 기록 실패:', logError);
+          }
+          
+          toast({
+            title: "자동화 공정 완료",
+            description: `모든 시퀀스(${selectedSequences.length}개)가 성공적으로 처리되었습니다.`,
+          });
+          
+          // 공정 완료 3초 후 자동 초기화
+          setTimeout(() => {
+            enhancedResetAutomation();
+            addLog("자동화 공정이 완료되어 자동으로 초기화되었습니다. 다음 공정을 시작할 수 있습니다.");
+          }, 3000);
+        }
+      } else if (newStatus === 'error' && index === currentSequenceIndex) {
+        // 오류 발생 시 자동화 공정 중단 여부 결정 (현재는 계속 진행)
+        const nextIndex = index + 1;
+        
+        // 다음 시퀀스가 있으면 계속 진행
+        if (nextIndex < selectedSequences.length) {
+          console.log(`오류 발생 후 다음 시퀀스 ${nextIndex} 실행 준비`);
+          
+          // 오류 알림
+          toast({
+            title: "시퀀스 오류",
+            description: `시퀀스 ${index + 1}(${currentSeq.sequence.name})에서 오류가 발생했습니다. 다음 시퀀스로 계속 진행합니다.`,
+            variant: "destructive"
+          });
+          
+          // 작업 로그북에 오류 발생 후 계속 진행 기록
+          try {
+            workLogService.saveWorkLog({
+              id: uuidv4(),
+              sequenceName: `[자동화] 오류 발생 후 계속 진행`,
+              startTime: new Date().toISOString(),
+              endTime: new Date().toISOString(),
+              status: 'warning' as 'running' | 'completed' | 'error' | 'aborted' | 'warning',
+              details: JSON.stringify({
+                errorSequence: currentSeq.sequence.name,
+                errorSequenceIndex: index,
+                errorDetails: details || '알 수 없는 오류',
+                nextSequence: selectedSequences[nextIndex].sequence.name,
+                nextSequenceIndex: nextIndex,
+                totalSequences: selectedSequences.length
+              })
+            });
+          } catch (logError) {
+            console.error('오류 후 계속 진행 로그 기록 실패:', logError);
+          }
+          
+          // 다음 시퀀스 실행
+          executeSequence(nextIndex);
+        } else {
+          // 마지막 시퀀스에서 오류 발생 시 자동화 공정 완료 처리
+          setStatus('error');
+          setCurrentSequenceIndex(-1);
+          addLog("자동화 공정 오류로 인해 중단됨", true);
+          
+          // 전체 자동화 공정 시간 계산
+          const automationEndTime = new Date();
+          const firstSeq = selectedSequences[0];
+          const automationStartTime = firstSeq.startTime ? new Date(firstSeq.startTime) : new Date(automationEndTime.getTime() - 60000);
+          const totalDurationSeconds = Math.round((automationEndTime.getTime() - automationStartTime.getTime()) / 1000);
+          
+          // 작업 로그북에 오류로 인한 중단 기록
+          try {
+            workLogService.saveWorkLog({
+              id: uuidv4(),
+              sequenceName: `[자동화] 오류로 인한 중단`,
+              startTime: automationStartTime.toISOString(),
+              endTime: automationEndTime.toISOString(),
+              status: 'error' as 'running' | 'completed' | 'error' | 'aborted' | 'warning',
+              details: JSON.stringify({
+                totalSequences: selectedSequences.length,
+                totalDuration: totalDurationSeconds,
+                errorSequence: currentSeq.sequence.name,
+                errorSequenceIndex: index,
+                errorDetails: details || '알 수 없는 오류',
+                sequences: selectedSequences.map(seq => ({
+                  name: seq.sequence.name,
+                  status: seq.status,
+                  duration: seq.startTime && seq.endTime ? Math.round((seq.endTime - seq.startTime) / 1000) : undefined
+                }))
+              })
+            });
+          } catch (logError) {
+            console.error('자동화 공정 오류 중단 로그 기록 실패:', logError);
+          }
+          
+          toast({
+            title: "자동화 공정 오류",
+            description: `시퀀스 ${index + 1}(${currentSeq.sequence.name})에서 오류가 발생하여 자동화 공정이 중단되었습니다.`,
+            variant: "destructive"
+          });
+        }
+      }
+    } catch (error) {
+      console.error("handleSequenceCompletion 함수 오류:", error);
+      addLog(`시퀀스 완료 처리 중 오류: ${error}`);
+    }
+  };
+  
+  // 시퀀스 실행 함수 개선
+  const executeSequence = (index: number) => {
+    try {
+      console.log(`시퀀스 ${index + 1} 실행 시작`);
+      
+      // 시퀀스가 유효한지 확인
+      if (index < 0 || index >= selectedSequences.length) {
+        console.error("유효하지 않은 시퀀스 인덱스:", index);
+        return;
+      }
+    
+    // 현재 시퀀스 정보
+    const currentSeq = selectedSequences[index];
+    const sequenceId = currentSeq.id;
+    
+    // 상태 업데이트
+    setCurrentSequenceIndex(index);
+    
+    // 현재 시퀀스만 실행 중 상태로 변경 (다른 시퀀스의 상태는 변경하지 않음)
+    setSelectedSequences(prev => {
+        const updated = [...prev];
+        updated[index] = {
+          ...updated[index],
+          status: 'running',
+        startTime: Date.now()
+      };
+        return updated;
+      });
+      
+      // 로그 추가
+      addLog(`시퀀스 ${index + 1} 실행 중: ${currentSeq.sequence.name}`, true);
+      
+      if (!mqttClient) {
+        throw new Error("MQTT 클라이언트가 초기화되지 않았습니다.");
+      }
+      
+      try {
+        // 시퀀스를 MQTT 메시지로 변환
+        const standardizedSequence = standardizeSequenceJson(currentSeq.sequence);
+        standardizedSequence.repeats = currentSeq.customRepeats; // 사용자 지정 반복 횟수 적용
+        
+        // MQTT 메시지 발행
+        const topic = EXTRACTION_INPUT_TOPIC;
+        const message = JSON.stringify({
+          sequences: [standardizedSequence]
+        }, null, 2);
+        
+        console.log(`시퀀스 발행: ${topic}`, message);
+        mqttClient.publish(topic, message);
+        
+        // 최대 실행 시간 계산 (기본값: 5분)
+        const estimatedDuration = calculateExpectedDuration(currentSeq.sequence);
+        const maxExecutionTime = Math.max(estimatedDuration * 2, 300) * 1000; // 예상 시간의 2배 또는 최소 5분
+        
+        // 시퀀스 실행 모니터링 (타임아웃)
+        const timeoutId = setTimeout(() => {
+        // 여전히 실행 중인 상태인지 확인
+        const currentSeqState = selectedSequences.find(s => s.id === sequenceId);
+        if (currentSeqState && currentSeqState.status === 'running') {
+            // 아직 완료되지 않았다면 타임아웃으로 간주하고 에러 처리
+            const errorMsg = `시퀀스 ${index + 1} (${currentSeq.sequence.name}) 실행 시간 초과: ${maxExecutionTime/1000}초`;
+            console.error(errorMsg);
+            addLog(errorMsg, true);
+            
+            // 해당 시퀀스를 에러 상태로 변경하고 다음 시퀀스 진행
+            updateSequenceStatus(index, 'error');
+            
+            // 다음 시퀀스 진행 또는 완료 처리
+            const nextIndex = index + 1;
+            if (nextIndex < selectedSequences.length) {
+              // 다음 시퀀스가 있으면 실행
+              executeNextSequence(nextIndex);
+            } else {
+              // 마지막 시퀀스였으면 완료 처리
+              setStatus('completed');
+              setCurrentSequenceIndex(-1);
+              addLog("모든 시퀀스 처리 완료 (일부 오류 발생)", true);
+            }
+          }
+        }, maxExecutionTime);
+        
+        // 타임아웃 ID 저장
+        setCountdownIntervals(prev => ({
+          ...prev,
+          [`timeout_${sequenceId}`]: timeoutId
+        }));
+        
+        return true;
+    } catch (e) {
+        console.error("시퀀스 실행 오류:", e);
+      addLog(`시퀀스 실행 오류: ${e}`, true);
+        updateSequenceStatus(index, 'error');
+        
+        // 다음 시퀀스 진행 시도
+        const nextIndex = index + 1;
+        if (nextIndex < selectedSequences.length) {
+          executeNextSequence(nextIndex);
+        } else {
+          setStatus('error');
+          setCurrentSequenceIndex(-1);
+        }
+        
+        return false;
+      }
+    } catch (error) {
+      console.error("executeSequence 함수 오류:", error);
+      toast({
+        title: "오류 발생",
+        description: `시퀀스 실행 중 오류가 발생했습니다: ${error}`,
+        variant: "destructive"
+      });
+      return false;
+    }
+  };
+
+  // 다음 시퀀스 실행 함수 추가
+  const executeNextSequence = (nextIndex: number) => {
+    if (nextIndex >= selectedSequences.length) {
+      // 더 이상 실행할 시퀀스가 없으면 완료 처리
+      setStatus('completed');
+      setCurrentSequenceIndex(-1);
+      addLog("모든 시퀀스 처리 완료", true);
+      return;
+    }
+    
+    const nextSequence = selectedSequences[nextIndex];
+    
+    // 대기 시간이 있으면 카운트다운 시작
+    if (nextSequence.waitTime > 0) {
+      addLog(`다음 시퀀스 ${nextSequence.waitTime}초 후 시작: ${nextSequence.sequence.name}`, true);
+      
+      // 카운트다운 시작
+      startCountdown(nextIndex, nextSequence.waitTime);
+      
+      // 대기 시간 후 시퀀스 실행
+      const timeoutId = setTimeout(() => {
+        // 카운트다운 정리
+        clearCountdown(nextIndex);
+        // 다음 시퀀스 실행
+        executeSequence(nextIndex);
+      }, nextSequence.waitTime * 1000);
+      
+      // 타임아웃 ID 저장
+      setCountdownIntervals(prev => ({
+        ...prev,
+        [nextIndex]: timeoutId
+      }));
+    } else {
+      // 대기 시간이 없으면 바로 실행
+      executeSequence(nextIndex);
+    }
+  };
+  
+  // 자동화 공정 리셋 함수 수정
+  
+  // 로그 추가 함수 수정
+  const addLog = (message: string, includeSequenceInfo: boolean = false) => {
+    let logMessage = message;
+    
+    // 시퀀스 정보 포함 옵션이 켜져 있고 현재 실행 중인 시퀀스가 있는 경우
+    if (includeSequenceInfo && currentSequenceIndex >= 0 && currentSequenceIndex < selectedSequences.length) {
+      const currentSeq = selectedSequences[currentSequenceIndex];
+      logMessage = `[시퀀스 ${currentSequenceIndex + 1}/${selectedSequences.length} - ${currentSeq.sequence.name}] ${message}`;
+    }
+    
+    setLogMessages(prev => {
+      const newLogs = [logMessage, ...prev].slice(0, 15);
+      return newLogs;
+    });
+    
+    // 로그 추가 후 로컬 스토리지에 자동 저장
+    if (status === 'running' || status === 'paused') {
+      setTimeout(saveStateToLocalStorage, 100);
+    }
+  };
+  
+  // 컴포넌트에 선택된 시퀀스 이름 상태 추가 (useState 선언부 근처에 추가)
+  // 컴포넌트 마운트 시 저장된, 자동화 공정 목록 불러오기
+  useEffect(() => {
+    const fetchSavedProcesses = async () => {
+      try {
+        setIsLoading(true);
+        
+        // 서버에서 저장된 자동화 공정 목록 조회
+        const processResponse = await fetch('/api/automation/processes');
+        
+        if (processResponse.ok) {
+          const processData = await processResponse.json();
+          console.log('자동화 공정 데이터 응답:', processData);
+          
+          // 시퀀스 데이터도 함께 조회
+          const sequenceResponse = await fetch('/api/sequences');
+          let sequenceData = { sequences: [] };
+          
+          if (sequenceResponse.ok) {
+            sequenceData = await sequenceResponse.json();
+            console.log('시퀀스 데이터 응답:', sequenceData);
+          } else {
+            console.error('시퀀스 목록 불러오기 실패:', await sequenceResponse.text());
+          }
+          
+          // processes가 있으면 그대로 사용, 없으면 빈 배열 사용
+          let processesWithIds = [];
+          if (processData.processes && Array.isArray(processData.processes)) {
+            // 각 프로세스의 시퀀스 배열에 ID가 없는 경우 추가
+            processesWithIds = processData.processes.map(process => {
+              // 시퀀스에 ID 추가
+              if (process.sequences && Array.isArray(process.sequences)) {
+                const sequencesWithIds = process.sequences.map(sequence => {
+                  return sequence.id ? sequence : { ...sequence, id: uuidv4() };
+                });
+                return { ...process, sequences: sequencesWithIds };
+              }
+              return process;
+            });
+          }
+          
+          // 시퀀스 데이터가 있고 프로세스 데이터가 없는 경우 시퀀스로 임시 프로세스 생성
+          if (processesWithIds.length === 0 && sequenceData.sequences && sequenceData.sequences.length > 0) {
+            console.log('시퀀스 데이터에서 프로세스 생성');
+            
+            // ID가 없는 시퀀스에 ID 추가
+            const sequencesWithIds = sequenceData.sequences.map(seq => {
+              return seq.id ? seq : { ...seq, id: uuidv4() };
+            });
+            
+            // 시퀀스를 SequenceWithStatus 형식으로 변환
+            const sequencesWithStatus = sequencesWithIds.map(seq => ({
+              id: seq.id,
+              sequence: seq,
+              status: 'waiting' as SequenceStatus,
+              waitTime: 0,
+              customRepeats: seq.repeats || 1
+            }));
+            
+            // 임시 프로세스 생성
+            processesWithIds = [{
+              id: uuidv4(),
+              name: "불러온 작업 목록",
+              sequences: sequencesWithStatus,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }];
+          }
+          
+          setSavedProcesses(processesWithIds);
+        } else {
+          console.error('자동화 공정 목록 불러오기 실패:', await processResponse.text());
+        }
+      } catch (error) {
+        console.error('자동화 공정 목록 불러오기 오류:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchSavedProcesses();
+  }, []);
+  
+  // 자동화 공정 저장 함수 수정 - 같은 이름 작업은 병합 대신 덮어쓰기
+  const saveProcess = async () => {
+    if (!processName.trim()) {
+      addLog('공정 이름을 입력해주세요.');
+      return;
+    }
+    
+    if (selectedSequences.length === 0) {
+      addLog('저장할 시퀀스가 없습니다.');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      addLog(`자동화 공정 '${processName.trim()}' 저장 시작...`);
+      
+      // 선택된 시퀀스에서 PumpSequence 객체만 추출
+      const extractedSequences = selectedSequences.map(seq => seq.sequence);
+      
+      // 저장할 자동화 공정 데이터 생성 - 타입 캐스팅 수정
+      const processData: Omit<SavedProcess, 'id' | 'createdAt' | 'updatedAt'> = {
+        name: processName.trim(),
+        description: processDescription.trim() || undefined,
+        sequences: selectedSequences.map(seq => ({
+          ...seq,
+          status: 'waiting' as SequenceStatus,
+          startTime: undefined,
+          endTime: undefined,
+          errorDetails: undefined
+        }))
+      };
+      
+      // 시퀀스 데이터도 별도로 저장 (sequence API 사용)
+      try {
+        console.log('시퀀스 데이터 저장 시작');
+        const sequenceResponse = await fetch('/api/sequences', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ sequences: extractedSequences })
+        });
+        
+        if (sequenceResponse.ok) {
+          const sequenceData = await sequenceResponse.json();
+          console.log('시퀀스 저장 성공:', sequenceData);
+        } else {
+          console.error('시퀀스 저장 실패:', await sequenceResponse.text());
+          addLog('시퀀스 데이터 저장 실패');
+        }
+      } catch (seqError) {
+        console.error('시퀀스 저장 중 오류:', seqError);
+        addLog(`시퀀스 저장 중 오류 발생: ${seqError.message || '알 수 없는 오류'}`);
+      }
+
+      // 기존 저장된 프로세스 불러오기
+      const processesResponse = await fetch('/api/automation/processes');
+      let existingProcesses = [];
+      
+      if (processesResponse.ok) {
+        const data = await processesResponse.json();
+        if (data.processes && Array.isArray(data.processes)) {
+          existingProcesses = data.processes;
+        }
+      }
+      
+      // 같은 이름의 기존 프로세스 ID 확인 (덮어쓰기 위함)
+      const existingProcess = existingProcesses.find(p => p.name === processName.trim());
+      const processId = existingProcess?.id || uuidv4();
+      
+      // 저장할 최종 프로세스 데이터
+      const finalProcessData = {
+        ...processData,
+        id: processId,
+        updatedAt: new Date().toISOString(),
+        createdAt: existingProcess?.createdAt || new Date().toISOString()
+      };
+      
+      // 같은 이름의 프로세스는 덮어쓰기 위해 나머지 프로세스만 필터링
+      const filteredProcesses = existingProcesses.filter(p => p.name !== processName.trim());
+      
+      // 새 데이터 추가하여 저장
+      const dataToSave = {
+        processes: [...filteredProcesses, finalProcessData]
+      };
+      
+      console.log('자동화 공정 저장 중 - 덮어쓰기 모드:', finalProcessData);
+      
+      // Redis에 저장 요청
+      const response = await fetch('/api/automation/processes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(dataToSave)
+      });
+      
+      if (response.ok) {
+        const responseData = await response.json();
+        console.log('저장 성공:', responseData);
+        
+        // 새로운 데이터로 전체 목록 갱신
+        setSavedProcesses(responseData.processes || []);
+        addLog(`자동화 공정 '${processData.name}'이(가) 성공적으로 저장되었습니다.`);
+        
+        // 저장 성공 UI 업데이트
+        setShowSaveDialog(false);
+        setProcessName('');
+        setProcessDescription('');
+        
+        // 성공 알림
+        toast({
+          title: "저장 성공",
+          description: `자동화 공정 '${processData.name}'이(가) 성공적으로 저장되었습니다.`,
+        });
+      } else {
+        throw new Error(await response.text() || '서버에 자동화 공정을 저장하지 못했습니다.');
+      }
+    } catch (error) {
+      console.error('자동화 공정 저장 오류:', error);
+      addLog(`자동화 공정 저장 오류: ${error.message || error}`);
+      
+      // 오류 알림 표시
+      toast({
+        variant: "destructive",
+        title: "저장 실패",
+        description: `자동화 공정을 저장하지 못했습니다: ${error.message || '알 수 없는 오류'}`,
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 자동화 공정 불러오기 함수
+  const loadProcess = async () => {
+    if (!selectedProcessId) {
+      addLog('불러올 공정을 선택해주세요.');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      // 현재 선택된 공정 찾기
+      const process = savedProcesses.find(p => p.id === selectedProcessId);
+      if (!process) {
+        throw new Error('선택한 공정을 찾을 수 없습니다.');
+      }
+      
+      // 현재 실행 중인 공정이 있다면 확인
+      if (status === 'running') {
+        addLog('실행 중인 공정이 있습니다. 먼저 리셋해주세요.');
+        setShowLoadDialog(false);
+        return;
+      }
+      
+      // 현재 상태 초기화 후 공정 불러오기
+      fullResetPriority();
+      
+      // ID가 없는 시퀀스에 ID 추가
+      const processedSequences = process.sequences.map(seq => ({
+        ...seq,
+        id: seq.id || uuidv4(),
+        status: 'waiting' as SequenceStatus,
+        startTime: undefined,
+        endTime: undefined,
+        errorDetails: undefined
+      }));
+      
+      setSelectedSequences(processedSequences);
+      setShowLoadDialog(false);
+      addLog(`자동화 공정 '${process.name}'을(를) 불러왔습니다.`);
+    } catch (error) {
+      console.error('자동화 공정 불러오기 오류:', error);
+      addLog(`자동화 공정 불러오기 오류: ${error}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 자동화 공정 삭제 함수 수정
+  const deleteProcess = async () => {
+    if (!selectedProcessId) {
+      toast({
+        variant: "destructive",
+        title: "삭제 실패",
+        description: "삭제할 프로세스가 선택되지 않았습니다."
+      });
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      
+      // 모든 저장된 프로세스 불러오기
+      const processesResponse = await fetch('/api/automation/processes');
+      let existingProcesses = [];
+      
+      if (processesResponse.ok) {
+        const data = await processesResponse.json();
+        if (data.processes && Array.isArray(data.processes)) {
+          existingProcesses = data.processes;
+        }
+      }
+      
+      // 삭제할 프로세스 확인
+      const processToDelete = existingProcesses.find(p => p.id === selectedProcessId);
+      
+      if (!processToDelete) {
+        toast({
+          variant: "destructive",
+          title: "삭제 실패",
+          description: "선택한 프로세스를 찾을 수 없습니다."
+        });
+        return;
+      }
+      
+      console.log(`[자동화 공정 삭제] 시도 중, 프로세스 ID: ${selectedProcessId}, 이름: ${processToDelete.name}`);
+      
+      // 프로세스 삭제 요청 URL
+      const url = `/api/automation/processes?id=${selectedProcessId}`;
+      
+      // 삭제 요청
+      const response = await fetch(url, {
+        method: 'DELETE'
+      });
+      
+      if (response.ok) {
+        const responseData = await response.json();
+        
+        if (responseData.success) {
+          console.log('[자동화 공정 삭제] 성공 응답:', responseData);
+          
+          // 목록에서 삭제된 프로세스 제거
+          setSavedProcesses(prev => prev.filter(p => p.id !== selectedProcessId));
+          setSelectedProcessId('');
+          setShowDeleteConfirm(false);
+          
+          // 성공 알림
+          toast({
+            title: "삭제 성공",
+            description: `자동화 공정 '${processToDelete.name}'이(가) 성공적으로 삭제되었습니다.`
+          });
+          
+          // 다시 공정 목록 불러오기 (항상 최신 목록 유지)
+          try {
+            const refreshResponse = await fetch('/api/automation/processes');
+            if (refreshResponse.ok) {
+              const refreshData = await refreshResponse.json();
+              if (refreshData.processes) {
+                setSavedProcesses(refreshData.processes);
+              }
+            }
+          } catch (refreshError) {
+            console.error('[자동화 공정 삭제] 목록 새로고침 실패:', refreshError);
+          }
+        } else {
+          throw new Error(responseData.error || '삭제 중 오류가 발생했습니다.');
+        }
+      } else {
+        // 오류 응답 확인
+        let errorMsg = '';
+        try {
+          const errorData = await response.json();
+          errorMsg = errorData.error || response.statusText;
+        } catch (e) {
+          errorMsg = await response.text() || `HTTP 오류: ${response.status}`;
+        }
+        
+        throw new Error(errorMsg);
+      }
+    } catch (error) {
+      console.error('[자동화 공정 삭제] 오류:', error);
+      
+      toast({
+        variant: "destructive", 
+        title: "삭제 실패",
+        description: `자동화 공정 삭제 중 오류가 발생했습니다: ${error.message || '알 수 없는 오류'}`
+      });
+    } finally {
+      setIsLoading(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+  
+  // 로컬 스토리지에서 자동화 상태 불러오기
+  const loadStateFromLocalStorage = useCallback(() => {
+    try {
+      const automationStateJson = localStorage.getItem(AUTOMATION_STATE_KEY);
+      const selectedSequencesJson = localStorage.getItem(AUTOMATION_SEQUENCES_KEY);
+      
+      if (automationStateJson && selectedSequencesJson) {
+        const automationState = JSON.parse(automationStateJson);
+        const storedSequences = JSON.parse(selectedSequencesJson);
+        
+        // 완료 또는 오류 상태인 경우 waiting 상태로 변경하여 UI 활성화
+        if (automationState.status === 'completed' || automationState.status === 'error') {
+          setStatus('waiting');
+          addLog('이전 자동화 공정 상태가 있습니다. 시퀀스를 편집하거나 다시 실행할 수 있습니다.');
+        } else {
+          // 시간 제한 없이 이전 상태 복원 (모든 상태 유지)
+          setStatus(automationState.status);
+          
+          // 상태에 따른 로그 추가
+          if (automationState.status === 'running') {
+            addLog('자동화 공정이 계속 진행 중입니다. 설정된 시퀀스에 따라 진행됩니다.');
+          } else if (automationState.status === 'paused') {
+            addLog('자동화 공정이 일시 중지되었습니다. 계속 진행하려면 시작 버튼을 누르세요.');
+          }
+        }
+        
+        setCurrentSequenceIndex(automationState.currentSequenceIndex || -1);
+        setLogs(automationState.logs || []);
+        setSelectedSequences(storedSequences || []);
+        
+        // 실행 중인 상태에서도 페이지 이동 가능하도록 잠금 비활성화
+        // if (automationState.status === 'running' && onLockChange) {
+        //   onLockChange(true);
+        // }
+        
+        return true;
+      }
+    } catch (error) {
+      console.error('자동화 공정 상태 불러오기 실패:', error);
+    }
+    
+    return false;
+  }, [onLockChange]);
+  
+  // 로컬 스토리지에 자동화 상태 저장
+  const saveStateToLocalStorage = useCallback(() => {
+    try {
+      const automationState = {
+        status,
+        currentSequenceIndex,
+        logs,
+        lastUpdated: Date.now()
+      };
+      
+      localStorage.setItem(AUTOMATION_STATE_KEY, JSON.stringify(automationState));
+      localStorage.setItem(AUTOMATION_SEQUENCES_KEY, JSON.stringify(selectedSequences));
+      
+      console.log('자동화 공정 상태 저장됨', automationState);
+    } catch (error) {
+      console.error('자동화 공정 상태 저장 실패:', error);
+    }
+  }, [status, currentSequenceIndex, logs, selectedSequences]);
+  
+  // 상태 변경 시 로컬 스토리지에 저장
+  useEffect(() => {
+    // 초기 로드 전이면 저장하지 않음
+    if (!initialStateLoaded?.current) return;
+    
+    // 처리 중 플래그가 설정된 경우 저장하지 않음
+    if (processingAction.current) return;
+    
+    // 상태 저장 지연 처리 (많은 업데이트를 방지하기 위해)
+    const saveTimer = setTimeout(() => {
+      try {
+        const automationState = {
+          status,
+          currentSequenceIndex,
+          logs: logs.slice(0, 50), // 로그 크기 제한
+          lastUpdated: Date.now()
+        };
+        
+        localStorage.setItem(AUTOMATION_STATE_KEY, JSON.stringify(automationState));
+        
+        // 시퀀스 배열 검증
+        if (Array.isArray(selectedSequences)) {
+          localStorage.setItem(AUTOMATION_SEQUENCES_KEY, JSON.stringify(selectedSequences));
+        }
+        
+        console.log('자동화 공정 상태 저장됨');
+      } catch (error) {
+        console.error('자동화 공정 상태 저장 실패:', error);
+      }
+    }, 300); // 300ms 지연
+    
+    // 컴포넌트가 언마운트되거나 deps가 변경되면 타이머 취소
+    return () => clearTimeout(saveTimer);
+  }, [status, currentSequenceIndex, selectedSequences, logs]);
+  
+  // 컴포넌트 마운트 시 로컬 스토리지에서 상태 불러오기 (한 번만 실행)
+  useEffect(() => {
+    // 상태가 이미 로드된 경우 중복 로드 방지
+    if (initialStateLoaded.current) return;
+    
+    // 로컬 스토리지에서 상태 로드 (초기 마운트 시에만)
+    try {
+      const automationStateJson = localStorage.getItem(AUTOMATION_STATE_KEY);
+      const selectedSequencesJson = localStorage.getItem(AUTOMATION_SEQUENCES_KEY);
+      
+      if (automationStateJson && selectedSequencesJson) {
+        // 로딩 플래그 설정
+        processingAction.current = true;
+        
+        const automationState = JSON.parse(automationStateJson);
+        const storedSequences = JSON.parse(selectedSequencesJson);
+        
+        // 완료 또는 오류 상태인 경우 waiting 상태로 변경
+        const newStatus = ['completed', 'error'].includes(automationState.status) 
+          ? 'waiting' 
+          : automationState.status || 'waiting';
+        
+        setStatus(newStatus);
+        setCurrentSequenceIndex(automationState.currentSequenceIndex || -1);
+        setLogs(automationState.logs || []);
+        
+        // 시퀀스 설정 전에 검증
+        if (Array.isArray(storedSequences)) {
+          setSelectedSequences(storedSequences);
+        } else {
+          console.warn('저장된 시퀀스가 배열이 아닙니다:', storedSequences);
+          setSelectedSequences([]);
+        }
+        
+        initialStateLoaded.current = true;
+        console.log('이전 상태를 로컬 스토리지에서 로드했습니다:', newStatus);
+        
+        // 로딩 플래그 해제
+        processingAction.current = false;
+      }
+    } catch (error) {
+      console.error('로컬 스토리지에서 상태 로드 실패:', error);
+      processingAction.current = false;
+    }
+  }, []);
+  
+  // 상태 변경 시 로컬 스토리지에 저장 (디바운스 적용)
+  const debouncedSaveStateRef = useRef<any>();
+  
+  // 디바운스된 저장 함수 생성
+  useEffect(() => {
+    // 디바운스된 저장 함수 생성
+    const saveState = () => {
+      // 처리 중 플래그가 설정된 경우 저장하지 않음
+      if (processingAction.current) return;
+      
+      try {
+        const automationState = {
+          status,
+          currentSequenceIndex,
+          logs: logs.slice(0, 50), // 로그 크기 제한
+          lastUpdated: Date.now()
+        };
+        
+        localStorage.setItem(AUTOMATION_STATE_KEY, JSON.stringify(automationState));
+        
+        // 시퀀스 배열 검증
+        if (Array.isArray(selectedSequences)) {
+          localStorage.setItem(AUTOMATION_SEQUENCES_KEY, JSON.stringify(selectedSequences));
+        }
+        
+        console.log('자동화 공정 상태 저장됨 (디바운스)');
+      } catch (error) {
+        console.error('자동화 공정 상태 저장 실패:', error);
+      }
+    };
+    
+    // 디바운스 함수 생성
+    debouncedSaveStateRef.current = debounce(saveState, 300);
+    
+    // 컴포넌트 언마운트 시 디바운스 취소
+    return () => {
+      if (debouncedSaveStateRef.current) {
+        debouncedSaveStateRef.current.cancel();
+      }
+    };
+  }, [status, currentSequenceIndex, logs, selectedSequences]);
+  
+  // 상태 변경 시 디바운스된 저장 함수 호출
+  useEffect(() => {
+    // 초기 로드 전이면 저장하지 않음
+    if (!initialStateLoaded.current) return;
+    
+    // 초기 로드 이후에만 상태 저장 실행
+    if (debouncedSaveStateRef.current && Array.isArray(selectedSequences)) {
+      debouncedSaveStateRef.current();
+    }
+  }, [status, currentSequenceIndex, selectedSequences, logs]);
+  
+  // savedSequences가 변경될 때 availableSequences 업데이트 (무한 루프 방지 로직 추가)
+  useEffect(() => {
+    // 이미 처리 중이면 중복 실행 방지
+    if (processingAction.current) return;
+    
+    // 시퀀스 목록을 사용 가능한 시퀀스로 설정
+    if (savedSequences && Array.isArray(savedSequences) && savedSequences.length > 0) {
+      // 현재 값과 비교하여 변경이 있을 때만 업데이트
+      const uniqueSequenceNames = savedSequences
+        .map(seq => seq.name)
+        .filter((value, index, self) => self.indexOf(value) === index);
+      
+      // 이전 값과 현재 값을 비교
+      const prevNamesJson = JSON.stringify(availableSequences);
+      const currentNamesJson = JSON.stringify(uniqueSequenceNames);
+      
+      if (prevNamesJson !== currentNamesJson) {
+        setAvailableSequences(uniqueSequenceNames);
+        console.log('사용 가능한 시퀀스 목록 업데이트됨:', uniqueSequenceNames.length);
+      }
+    } else if (availableSequences.length > 0) {
+      // 시퀀스가 없는데 availableSequences가 있으면 초기화
+      setAvailableSequences([]);
+    }
+  }, [savedSequences, availableSequences]);
+  
+  // 시퀀스 예상 실행 시간 계산 함수 추가
+  const calculateExpectedDuration = (sequence: PumpSequence): number => {
+    const baseTime = 10; // 기본 시간 (초)
+    const modeMultiplier = Math.floor(sequence.operation_mode / 10) === 1 ? 2 : 
+                          Math.floor(sequence.operation_mode / 10) === 2 ? 3 : 4;
+    const repeatMultiplier = sequence.repeats || 1;
+    
+    // 최소 30초, 최대 5분으로 제한
+    return Math.min(300, Math.max(30, baseTime * modeMultiplier * repeatMultiplier));
+  };
+  
+  // 상태에 따른 배경색 반환
+  const getStatusBgColor = () => {
+    switch (status) {
+      case 'waiting': return 'bg-gray-100';
+      case 'running': return 'bg-blue-100';
+      case 'completed': return 'bg-green-100';
+      case 'stopped': return 'bg-red-100';
+      default: return 'bg-gray-100';
+    }
+  };
+  
+  // 상태에 따른 텍스트 반환
+  const getStatusText = () => {
+    switch (status) {
+      case 'waiting': return '대기중';
+      case 'running': return '실행중';
+      case 'completed': return '완료';
+      case 'stopped': return '멈춤';
+      default: return '알 수 없음';
+    }
+  };
+  
+  // 시퀀스 상태 배지 컴포넌트
+  const StatusBadge = ({ status }: { status: SequenceStatus }) => {
+    switch (status) {
+      case 'waiting':
+        return <Badge variant="outline" className="bg-gray-100 text-gray-800 border-gray-300 px-3">대기</Badge>;
+      case 'running':
+        return <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300 px-3 animate-pulse">실행중</Badge>;
+      case 'completed':
+        return <Badge variant="outline" className="bg-green-100 text-green-800 border-green-300 px-3">완료</Badge>;
+      case 'error':
+        return <Badge variant="outline" className="bg-red-100 text-red-800 border-red-300 px-3">오류</Badge>;
+      default:
+        return <Badge variant="outline">알 수 없음</Badge>;
+    }
+  };
+  
+  // 시간 형식 변환 함수
+  const formatTime = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}초`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}분`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}시간`;
+    return `${Math.floor(seconds / 86400)}일`;
+  };
+  
+  // 대기 시간 팝업 열기
+  const openTimePopup = (index: number, currentTime: number) => {
+    // 현재 설정된 시간을 시/분/초로 변환
+    const hours = Math.floor(currentTime / 3600);
+    const minutes = Math.floor((currentTime % 3600) / 60);
+    const seconds = currentTime % 60;
+    
+    setTempHours(hours);
+    setTempMinutes(minutes);
+    setTempSeconds(seconds);
+    setShowTimePopup(index);
+  };
+  
+  // 대기 시간 팝업 저장
+  const saveTimePopup = (index: number) => {
+    const totalSeconds = (tempHours * 3600) + (tempMinutes * 60) + tempSeconds;
+    handleWaitTimeChange(index, totalSeconds);
+    setShowTimePopup(null);
+  };
+  
+  // 카운트다운 시작 함수를 수정합니다
+  const startCountdown = (index: number, seconds: number) => {
+    console.log(`시퀀스 ${index}의 카운트다운 시작: ${seconds}초`);
+    
+    // 초기 카운트다운 값 설정
+    setWaitingCountdowns(prev => ({
+      ...prev,
+      [index]: seconds
+    }));
+    
+    // 1초마다 카운트다운 감소
+    const intervalId = setInterval(() => {
+      setWaitingCountdowns(prev => {
+        const currentCount = prev[index];
+        if (currentCount <= 1) {
+          // 카운트다운 종료
+          clearInterval(intervalId);
+          return {
+            ...prev,
+            [index]: 0
+          };
+        }
+        return {
+          ...prev,
+          [index]: currentCount - 1
+        };
+      });
+    }, 1000);
+    
+    // 인터벌 ID 저장
+    setCountdownIntervals(prev => ({
+      ...prev,
+      [`interval_${index}`]: intervalId
+    }));
+  };
+
+  // 카운트다운 제거 함수도 수정합니다
+  const clearCountdown = (index: number) => {
+    const intervalId = countdownIntervals[`interval_${index}`];
+    if (intervalId) {
+      clearInterval(intervalId);
+    }
+    
+    // 카운트다운 상태에서 제거
+    setWaitingCountdowns(prev => {
+      const updated = { ...prev };
+      delete updated[index];
+      return updated;
+    });
+    
+    // 인터벌 ID 목록에서 제거
+    setCountdownIntervals(prev => {
+      const updated = { ...prev };
+      delete updated[`interval_${index}`];
+      return updated;
+    });
+  };
+  
+  // 큐 비우기 명령
+  const clearQueue = () => {
+    if (!mqttClient) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, "clear_q");
+      addLog('Queue clear command sent');
+    } catch (e) {
+      addLog(`Queue clear command error: ${e}`);
+    }
+  };
+  
+  // 큐에서 항목 제거
+  const removeQueueItem = (itemId: string) => {
+    if (!mqttClient) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, "remove_q");
+      addLog(`Queue item remove command sent: ${itemId}`);
+    } catch (e) {
+      addLog(`Queue item remove command error: ${e}`);
+    }
+  };
+  
+  // 큐 처리 일시정지
+  const pauseQueueProcessing = () => {
+    if (!mqttClient) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, "pause");
+      addLog(`Queue processing pause command sent`);
+    } catch (e) {
+      addLog(`Queue pause command error: ${e}`);
+    }
+  };
+
+  // 큐 처리 재개
+  const resumeQueueProcessing = () => {
+    if (!mqttClient) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, "resume");
+      addLog(`Queue processing resume command sent`);
+    } catch (e) {
+      addLog(`Queue resume command error: ${e}`);
+    }
+  };
+
+  // 큐 목록 조회
+  const listQueue = () => {
+    if (!mqttClient) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, "list_q");
+      addLog(`Queue list command sent`);
+    } catch (e) {
+      addLog(`Queue list command error: ${e}`);
+    }
+  };
+  
+  // 수동 입력 명령 발행
+  const publishManualCommand = () => {
+    if (!mqttClient || !manualCommand.trim()) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, manualCommand);
+      addLog(`Manual command sent: ${manualCommand}`);
+      setManualCommand(""); // 입력 필드 초기화
+    } catch (e) {
+      addLog(`Manual command error: ${e}`);
+    }
+  };
+  
+  // 큐 항목 전체 제거 명령
+  const removeAllQueueItems = () => {
+    if (!mqttClient) return;
+    
+    try {
+      mqttClient.publish(EXTRACTION_INPUT_TOPIC, "remove_q");
+      addLog(`Remove all queue items command sent`);
+    } catch (e) {
+      addLog(`Remove queue command error: ${e}`);
+    }
+  };
+  
+  // 현재 진행 중인 시퀀스 정보 가져오기
+  const getCurrentSequenceInfo = () => {
+    if (currentSequenceIndex >= 0 && currentSequenceIndex < selectedSequences.length) {
+      const seq = selectedSequences[currentSequenceIndex];
+      return `${currentSequenceIndex + 1}/${selectedSequences.length}: ${seq.sequence.name}`;
+    }
+    return '';
+  };
+  
+  // 새로고침 감지 및 자동 초기화 처리
+  useEffect(() => {
+    // 페이지 로드 시 타임스탬프 기록
+    const pageLoadTime = Date.now();
+    
+    // 마지막 활성 시간 가져오기
+    const lastActiveTime = parseInt(localStorage.getItem('automation-last-active-time') || '0');
+    
+    // 현재 시간 저장
+    localStorage.setItem('automation-last-active-time', pageLoadTime.toString());
+    
+    // 새로고침 감지 (3초 이내의 간격은 새로고침으로 간주)
+    const isRefresh = pageLoadTime - lastActiveTime < 3000;
+    
+    // 새로고침이고 상태가 완료나 오류면 초기화
+    if (isRefresh) {
+      // 로컬 스토리지에서 현재 상태 확인
+      try {
+        const automationStateJson = localStorage.getItem(AUTOMATION_STATE_KEY);
+        if (automationStateJson) {
+          const automationState = JSON.parse(automationStateJson);
+          
+          // 완료 또는 오류 상태면 waiting 상태로 변경
+          if (automationState.status === 'completed' || automationState.status === 'error') {
+            setStatus('waiting');
+            addLog('새로고침 감지: 자동화 공정 상태를 초기화했습니다. 시퀀스를 편집하거나 다시 실행할 수 있습니다.');
+          }
+        }
+      } catch (error) {
+        console.error('자동화 공정 상태 확인 실패:', error);
+      }
+    }
+    
+    // 페이지 언로드 시 현재 시간 저장
+    const handleBeforeUnload = () => {
+      localStorage.setItem('automation-last-active-time', Date.now().toString());
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+  
+  // resetAutomation 함수 복원
+  const enhancedResetAutomation = () => {
+    console.log('자동화 공정 리셋 시작');
+    
+    try {
+      // 처리 중 플래그 설정으로 다른 상태 업데이트를 차단
+      processingAction.current = true;
+      
+      // 실행 중인 카운트다운 타이머가 있으면 모두 정리
+      Object.values(countdownIntervals).forEach(interval => {
+        clearInterval(interval);
+        clearTimeout(interval);
+      });
+      
+      // 상태 초기화 (선택한 시퀀스는 유지)
+      setStatus('waiting');
+      setCurrentSequenceIndex(-1);
+      setWaitingCountdowns({});
+      setCountdownIntervals({});
+      
+      // 모든 시퀀스의 상태를 'waiting'으로 초기화
+      setSelectedSequences(prev => prev.map(seq => ({
+        ...seq,
+        status: 'waiting',
+        startTime: undefined,
+        endTime: undefined,
+        errorDetails: undefined
+      })));
+      
+      // 큐 초기화
+      if (mqttClient) {
+        try {
+          // 강제 중지 메시지 발행
+          mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+            action: 'force_stop',
+            priority: 'high'
+          }));
+          
+          // 약간의 지연 후 큐 초기화
+          setTimeout(() => {
+            mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+              action: 'clear_all',
+              priority: 'high'
+            }));
+            
+            // 처리 완료 플래그 해제
+            processingAction.current = false;
+            
+            toast({
+              title: "리셋 완료",
+              description: "공정 상태가 초기화되었습니다.",
+            });
+          }, 500);
+        } catch (error) {
+          console.error('MQTT 메시지 발행 중 오류:', error);
+          processingAction.current = false;
+        }
+      } else {
+      processingAction.current = false;
+      
+      toast({
+        title: "리셋 완료",
+        description: "공정 상태가 초기화되었습니다.",
+      });
+      }
+    } catch (error) {
+      console.error('MQTT 메시지 발행 중 오류:', error);
+      processingAction.current = false;
+    }
+  };
+  
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    console.log('MQTT 클라이언트 연결 설정 중...');
+    
+    // 클라이언트 ID 생성 및 저장 (첫 접속 시)
+    if (!localStorage.getItem('automation-client-id')) {
+      localStorage.setItem('automation-client-id', `client_${Math.random().toString(36).substring(2, 9)}`);
+    }
+    
+    // MQTT 구독 설정
+    mqttClient.on('message', messageHandler);
+    
+    // 필수 토픽 구독
+    mqttClient.subscribe(EXTRACTION_OUTPUT_TOPIC);
+    mqttClient.subscribe(PROCESS_PROGRESS_TOPIC);
+    mqttClient.subscribe(QUEUE_STATUS_TOPIC);
+    mqttClient.subscribe(AUTOMATION_STATUS_TOPIC); // 자동화 상태 공유 토픽 추가
+    
+    return () => {
+      console.log('MQTT 메시지 구독 해제');
+      mqttClient.off('message', messageHandler);
+    };
+  }, [mqttClient]); // mqttClient만 의존성으로 사용
+  
+  // 상태 변경 시 MQTT를 통해 상태 공유
+  useEffect(() => {
+    if (!mqttClient || !status) return;
+    
+    // 클라이언트 ID 확인 및 생성 - 세션 지속성 유지
+    if (!localStorage.getItem('automation-client-id')) {
+      localStorage.setItem('automation-client-id', `client_${Math.random().toString(36).substring(2, 9)}`);
+    }
+    
+    // 이전 상태와 비교하여 변경이 있는 경우에만 메시지 발행
+    const prevStatus = prevStateRef.current.status;
+    const prevIndex = prevStateRef.current.currentSequenceIndex;
+    const prevSequencesJSON = JSON.stringify(prevStateRef.current.selectedSequences);
+    const prevCountdownsJSON = JSON.stringify(prevStateRef.current.waitingCountdowns);
+    
+    const currentSequencesJSON = JSON.stringify(selectedSequences);
+    const currentCountdownsJSON = JSON.stringify(waitingCountdowns);
+    
+    // 상태 변경이 없으면 아무것도 하지 않음
+    if (
+      prevStatus === status &&
+      prevIndex === currentSequenceIndex &&
+      prevSequencesJSON === currentSequencesJSON &&
+      prevCountdownsJSON === currentCountdownsJSON
+    ) {
+      return;
+    }
+    
+    // 이제 상태에 변경이 있는 경우에만 처리
+    try {
+      const automationState = {
+        status,
+        currentSequenceIndex,
+        selectedSequences,
+        waitingCountdowns,
+        lastUpdated: Date.now(),
+        clientId: localStorage.getItem('automation-client-id')
+      };
+      
+      // 상태 공유 토픽에 발행
+      mqttClient.publish(AUTOMATION_STATUS_TOPIC, JSON.stringify(automationState));
+      console.log('자동화 공정 상태 공유됨:', status);
+      
+      // 현재 상태를 이전 상태로 저장
+      prevStateRef.current = {
+        status,
+        currentSequenceIndex,
+        selectedSequences,
+        waitingCountdowns
+      };
+    } catch (error) {
+      console.error('자동화 공정 상태 공유 실패:', error);
+    }
+  }, [mqttClient, status, currentSequenceIndex, selectedSequences, waitingCountdowns]);
+  
+  // resetAutomation 함수 - 시퀀스 설정을 유지하며 상태만 초기화
+  const enhancedPriorityReset = () => {
+    console.log('자동화 공정 리셋 시작 - 현재 설정된 시퀀스 유지하며 초기화');
+    
+    // 이미 처리 중인 경우 중복 실행 방지
+    if (processingAction.current) {
+      console.log('이미 다른 작업이 처리 중입니다. 리셋 요청 무시됨.');
+      return;
+    }
+    
+    // 모든 구독 및 이벤트 핸들러 일시 중지
+    if (mqttClient) {
+      mqttClient.off('message', messageHandler);
+    }
+    
+    processingAction.current = true;
+    
+    // 실행 중인 카운트다운 타이머가 있으면 모두 정리
+    Object.values(countdownIntervals).forEach(interval => {
+      clearInterval(interval);
+      clearTimeout(interval);
+    });
+    
+    // 상태 초기화 (선택한 시퀀스는 유지)
+    setStatus('waiting');
+    setCurrentSequenceIndex(-1);
+    setWaitingCountdowns({});
+    setCountdownIntervals({});
+    
+    // 모든 시퀀스의 상태를 'waiting'으로 초기화
+    setSelectedSequences(prev => prev.map(seq => ({
+      ...seq,
+      status: 'waiting',
+      startTime: undefined,
+      endTime: undefined,
+      errorDetails: undefined
+    })));
+    
+    // 큐 초기화
+    if (mqttClient) {
+      try {
+        // 강제 중지 및 초기화 메시지
+        mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+          action: 'force_stop',
+          priority: 'high'
+        }));
+        
+        // 약간의 지연 후 큐 초기화
+        setTimeout(() => {
+          mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+            action: 'clear_all',
+            priority: 'high'
+          }));
+          
+          // 메시지 핸들러 재등록
+          mqttClient.on('message', messageHandler);
+          
+          processingAction.current = false;
+          
+          toast({
+            title: "리셋 완료",
+            description: "공정 상태가 초기화되었습니다. 시퀀스 설정은 유지됩니다.",
+          });
+          
+          // 로컬 스토리지에 시퀀스 상태 업데이트
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem(AUTOMATION_STATE_KEY, JSON.stringify({
+                status: 'waiting',
+                currentSequenceIndex: -1,
+                waitingCountdowns: {}
+              }));
+            } catch (error) {
+              console.error('로컬 스토리지 저장 중 오류:', error);
+            }
+          }
+        }, 500);
+      } catch (error) {
+        console.error('MQTT 메시지 발행 중 오류:', error);
+        processingAction.current = false;
+        
+        // 메시지 핸들러 재등록
+        mqttClient.on('message', messageHandler);
+      }
+    } else {
+      processingAction.current = false;
+      
+      toast({
+        title: "리셋 완료",
+        description: "공정 상태가 초기화되었습니다. 시퀀스 설정은 유지됩니다.",
+      });
+    }
+  };
+  
+  // fullReset 함수 - 모든 상태와 설정을 초기화
+  const fullResetPriority = () => {
+    console.log('자동화 공정 완전 초기화 시작 - 모든 설정 초기화');
+    
+    // 이미 처리 중인 경우 중복 실행 방지
+    if (processingAction.current) {
+      console.log('이미 다른 작업이 처리 중입니다. 완전 초기화 요청 무시됨.');
+      return;
+    }
+    
+    // 모든 구독 및 이벤트 핸들러 일시 중지
+    if (mqttClient) {
+      mqttClient.off('message', messageHandler);
+    }
+    
+    // 여러 상태 변경 작업 전에 처리 중 플래그 설정
+    processingAction.current = true;
+    
+    // 실행 중인 카운트다운 타이머가 있으면 모두 정리
+    Object.values(countdownIntervals).forEach(interval => {
+      clearInterval(interval);
+      clearTimeout(interval);
+    });
+    
+    // 상태 초기화
+    setStatus('waiting');
+    setSelectedSequences([]);
+    setCurrentSequenceIndex(-1);
+    setLogs([]);
+    setLogMessages([]); // 로그 메시지도 초기화
+    setWaitingCountdowns({});
+    setShowTimePopup(null);
+    setTempHours(0);
+    setTempMinutes(0);
+    setTempSeconds(0);
+    setCountdownIntervals({});
+    
+    // 로컬 스토리지 데이터 삭제
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(AUTOMATION_STATE_KEY);
+        localStorage.removeItem(AUTOMATION_SEQUENCES_KEY);
+      } catch (error) {
+        console.error('로컬 스토리지 데이터 삭제 중 오류:', error);
+      }
+    }
+    
+    // 큐 상태 초기화
+    if (mqttClient) {
+      try {
+        // 강제 중지 메시지 발행
+        mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+          action: 'force_stop',
+          priority: 'high'
+        }));
+        
+        // 약간의 지연 후 큐 초기화
+        setTimeout(() => {
+          // 큐 초기화 메시지 발행
+          mqttClient.publish(AUTOMATION_CONTROL_TOPIC, JSON.stringify({
+            action: 'clear_all',
+            priority: 'high'
+          }));
+          
+          // 메시지 핸들러 재등록
+          mqttClient.on('message', messageHandler);
+          
+          processingAction.current = false;
+          
+          // 초기화 완료 알림
+          toast({
+            title: "완전 초기화 완료",
+            description: "모든 상태가 초기화되었습니다. 새로운 설정을 시작할 수 있습니다.",
+          });
+        }, 500);
+      } catch (error) {
+        console.error('MQTT 메시지 발행 중 오류:', error);
+        processingAction.current = false;
+        
+        // 메시지 핸들러 재등록
+        mqttClient.on('message', messageHandler);
+      }
+    } else {
+      processingAction.current = false;
+      
+      // 초기화 완료 알림
+      toast({
+        title: "완전 초기화 완료",
+        description: "모든 상태가 초기화되었습니다. 새로운 설정을 시작할 수 있습니다.",
+      });
+    }
+  };
+    
+    // MQTT 메시지 처리
+    const messageHandler = (topic: string, message: Buffer) => {
+    // 상태가 진행중인 초기화 작업이 있으면 메시지 처리 무시
+    if (processingAction.current) {
+      console.log('초기화 중이므로 메시지 처리를 건너뜁니다:', topic);
+      return;
+    }
+    
+      try {
+        const messageStr = message.toString();
+        
+        // 필수 토픽만 로그에 출력
+        if (topic === EXTRACTION_INPUT_TOPIC) {
+          console.log(`📤 [INPUT] ${messageStr.substring(0, 100)}...`);
+        } 
+        else if (topic === EXTRACTION_OUTPUT_TOPIC) {
+          console.log(`📥 [OUTPUT] ${messageStr}`);
+          // addLog 대신 직접 로그 객체 생성
+          const newLog = {
+            id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+            message: `OUTPUT: ${messageStr}`,
+            timestamp: Date.now(),
+            type: 'info' as const
+          };
+          setLogs(prevLogs => [...prevLogs, newLog].slice(-100));
+        }
+        else if (topic === PROCESS_PROGRESS_TOPIC) {
+          console.log(`📊 [PROGRESS] ${messageStr}`);
+        
+        // 메시지 크기 제한 처리 (10000자 이상인 경우 축약)
+        let displayMessage = messageStr;
+        if (displayMessage && displayMessage.length > 10000) {
+          console.warn(`진행 상태 메시지가 너무 큽니다: ${displayMessage.length} 바이트. 잘라냅니다.`);
+          displayMessage = displayMessage.substring(0, 10000) + "... (메시지 크기 초과로 잘림)`);
+        }
+        
+        // 진행 상태 메시지 저장
+        setProgress(displayMessage);
+        
+        // 로그 객체 추가 (logs는 로그 객체 배열)
+              const newLog = {
+                id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          message: `PROGRESS: ${displayMessage.substring(0, 100)}${displayMessage.length > 100 ? '...' : ''}`,
+                timestamp: Date.now(),
+          type: 'info' as const
+              };
+              setLogs(prevLogs => [...prevLogs, newLog].slice(-100));
+              
+        // 로그 메시지 추가 (logMessages는 문자열 배열)
+        setLogMessages(prev => {
+          const newMessage = `[${new Date().toLocaleTimeString()}] 진행 상태: ${displayMessage.substring(0, 50)}${displayMessage.length > 50 ? '...' : ''}`;
+          return [newMessage, ...prev].slice(0, 100); // 최대 100개만 유지
+        });
+      }
+      else if (topic === AUTOMATION_STATUS_TOPIC) {
+        // 다른 클라이언트의 자동화 상태 수신
+        try {
+          const automationState = JSON.parse(messageStr);
+          
+          // 본인이 발행한 메시지는 무시
+          const clientId = localStorage.getItem('automation-client-id');
+          if (automationState.clientId && automationState.clientId === clientId) {
+            console.log('본인이 발행한 메시지이므로 무시합니다.');
+            return;
+          }
+          
+          console.log(`📱 [자동화 상태 동기화] 수신된 상태:`, automationState);
+          
+          // 로컬에서 이미 실행 중인 경우 무시 (충돌 방지)
+          if (status === 'running' && currentSequenceIndex >= 0) {
+            console.log('로컬에서 이미 실행 중이므로 원격 상태 업데이트를 무시합니다.');
+            return;
+          }
+          
+          // 원격 동기화 수행
+          if (automationState.selectedSequences && Array.isArray(automationState.selectedSequences)) {
+            setSelectedSequences(automationState.selectedSequences);
+          }
+          
+          if (automationState.status) {
+            setStatus(automationState.status);
+          }
+          
+          if (automationState.currentSequenceIndex !== undefined) {
+            setCurrentSequenceIndex(automationState.currentSequenceIndex);
+          }
+          
+          if (automationState.waitingCountdowns) {
+            setWaitingCountdowns(automationState.waitingCountdowns);
+          }
+          
+          // 상태 업데이트 로그 (비교적 중요한 상태 변화만 로그에 기록)
+          if (automationState.status !== status || 
+              automationState.currentSequenceIndex !== currentSequenceIndex) {
+            addLog('자동화 공정 상태가 다른 클라이언트와 동기화되었습니다.', false);
+            console.log('자동화 공정 상태 동기화 완료');
+          }
+        } catch (error) {
+          console.error('자동화 상태 동기화 오류:', error);
+        }
+      }
+      
+      // MQTT OUTPUT 토픽 처리 (기존 코드)
+      if (topic === EXTRACTION_OUTPUT_TOPIC) {
+        // 텍스트 메시지 처리
+        addLog(`상태 메시지 수신: ${messageStr}`, true);
+          
+        // 공정 종료 메시지 감지
+        const isCompletionMessage = messageStr.toLowerCase().includes('공정 종료') || 
+                                  messageStr.toLowerCase().includes('공정종료') ||
+                                  messageStr.includes('디바이스 재부팅 시작');
+        
+        if (isCompletionMessage) {
+          console.log(`🚨 완료 메시지 감지! [${messageStr}]`);
+          
+          // 현재 실행 중인 시퀀스에만 완료 처리 적용
+          if (status === 'running' && currentSequenceIndex >= 0) {
+            // 현재 시퀀스의 상태가 'running'인 경우에만 완료 처리 수행
+            const currentSeq = selectedSequences[currentSequenceIndex];
+            if (currentSeq && currentSeq.status === 'running') {
+              addLog(`시퀀스 ${currentSequenceIndex + 1} 완료 메시지 감지: ${currentSeq.sequence.name}`, true);
+              // 시퀀스 완료 처리
+              handleSequenceCompletion(currentSequenceIndex, 'completed', '공정 종료 메시지 감지');
+            } else {
+              // 이미 완료되었거나 에러 상태인 경우 로그만 남김
+              if (currentSeq) {
+                addLog(`완료 메시지가 감지되었으나 시퀀스 ${currentSequenceIndex + 1}는 이미 ${currentSeq.status} 상태입니다.`, true);
+              }
+            }
+          } else {
+            addLog(`완료 메시지가 감지되었으나 실행 중인 시퀀스가 없습니다.`, false);
+          }
+          }
+        }
+        
+        // 큐 상태 토픽 처리
+        if (topic === QUEUE_STATUS_TOPIC) {
+          try {
+            const queueData = JSON.parse(messageStr);
+            // 이전 상태와 비교해서 변경된 경우에만 업데이트
+            setQueueStatus(prev => {
+              // 상태가 동일하면 이전 상태 그대로 반환하여 불필요한 리렌더링 방지
+              if (prev && 
+                  prev.count === queueData.count && 
+                  prev.isProcessing === queueData.isProcessing) {
+                return prev;
+              }
+              console.log(`[큐 상태 업데이트] 항목 수: ${queueData.count}, 처리 중: ${queueData.isProcessing}`);
+              return queueData;
+            });
+          } catch (error) {
+            console.error('큐 상태 메시지 처리 중 오류:', error);
+          }
+        }
+      } catch (error) {
+      console.error('메시지 처리 중 오류:', error);
+    }
+  };
+  
+  // 이전 상태 저장을 위한 ref 객체 생성
+  const prevStateRef = useRef({
+    status: '',
+    currentSequenceIndex: -1,
+    selectedSequences: [],
+    waitingCountdowns: {}
+  });
+  
+  useEffect(() => {
+    if (!mqttClient || !status) return;
+    
+    // 메모리 참조 비교를 위한 변수
+    const currentSequencesRef = JSON.stringify(selectedSequences);
+    const currentCountdownsRef = JSON.stringify(waitingCountdowns);
+    
+    // 다른 클라이언트와 상태 공유를 위한 MQTT 메시지 발행
+    try {
+      // 이전 상태와 비교하여 변경이 있는 경우에만 메시지 발행
+      const prevStatus = prevStateRef.current.status;
+      const prevIndex = prevStateRef.current.currentSequenceIndex;
+      const prevSequencesJSON = JSON.stringify(prevStateRef.current.selectedSequences);
+      const prevCountdownsJSON = JSON.stringify(prevStateRef.current.waitingCountdowns);
+      
+      // 현재 상태와 이전 상태가 동일한 객체를 참조하는지 확인
+      if (
+        prevStatus === status &&
+        prevIndex === currentSequenceIndex &&
+        prevSequencesJSON === currentSequencesRef &&
+        prevCountdownsJSON === currentCountdownsRef
+      ) {
+        // 상태가 변경되지 않았으면 아무 작업도 수행하지 않음
+        return;
+      }
+      
+      // 상태에 변경이 있을 때만 메시지 발행
+      const automationState = {
+        status,
+        currentSequenceIndex,
+        selectedSequences,
+        waitingCountdowns,
+        lastUpdated: Date.now(),
+        clientId: localStorage.getItem('automation-client-id') || `client_${Math.random().toString(36).substring(2, 9)}`
+      };
+      
+      // 클라이언트 ID 유지
+      if (!localStorage.getItem('automation-client-id')) {
+        localStorage.setItem('automation-client-id', automationState.clientId);
+      }
+      
+      // 상태 공유 토픽에 발행
+      mqttClient.publish(AUTOMATION_STATUS_TOPIC, JSON.stringify(automationState));
+      console.log('자동화 공정 상태 공유됨:', status);
+      
+      // 현재 상태를 이전 상태로 저장
+      prevStateRef.current = {
+        status,
+        currentSequenceIndex,
+        selectedSequences,
+        waitingCountdowns
+      };
+    } catch (error) {
+      console.error('자동화 공정 상태 공유 실패:', error);
+    }
+  }, [mqttClient, status, currentSequenceIndex, selectedSequences, waitingCountdowns]);
+  
+  // 로컬 스토리지에서 상태 복원 함수 최적화 (약 1610줄 근처)
+  useEffect(() => {
+    // 이미 로드된 상태이면 다시 로드하지 않음
+    if (initialStateLoaded.current) return;
+    
+    // 처리 중 플래그 설정
+    processingAction.current = true;
+    console.log("자동화 공정 상태 로드 시작");
+    
+    try {
+      // 로컬 스토리지에서 상태 가져오기
+      const savedState = localStorage.getItem(AUTOMATION_STATE_KEY);
+      const savedSequences = localStorage.getItem(AUTOMATION_SEQUENCES_KEY);
+      
+      if (savedState && savedSequences) {
+        const state = JSON.parse(savedState);
+        const sequences = JSON.parse(savedSequences);
+        
+        // 시퀀스 데이터 유효성 검사
+        if (Array.isArray(sequences) && sequences.length > 0) {
+          console.log('로컬 스토리지에서 시퀀스 복원:', sequences.length);
+          
+          // 시퀀스 상태가 실행 중이거나 대기 중이면 모두 대기 상태로 초기화
+          const resetSequences = sequences.map(seq => ({
+            ...seq,
+            status: 'waiting' as SequenceStatus,
+            startTime: undefined,
+            endTime: undefined,
+            errorDetails: undefined
+          }));
+          
+          // 일괄 업데이트를 위해 상태를 한 번에 설정
+          setSelectedSequences(resetSequences);
+          
+          // 상태가 실행 중이거나 일시정지 상태면 대기 상태로 초기화
+          if (state.status === 'running' || state.status === 'paused') {
+            setStatus('waiting');
+            setCurrentSequenceIndex(-1);
+          } else {
+            // 그 외 상태는 저장된 상태 그대로 복원
+            setStatus(state.status || 'waiting');
+            setCurrentSequenceIndex(state.currentSequenceIndex !== undefined ? state.currentSequenceIndex : -1);
+          }
+          
+          // 로그 복원 (최대 50개)
+          if (Array.isArray(state.logs)) {
+            setLogs(state.logs.slice(0, 50));
+          }
+          
+          console.log('저장된 자동화 공정 상태 복원 완료');
+        } else {
+          console.log('유효한 시퀀스 데이터가 없어 초기 상태로 설정');
+          // 유효한 시퀀스 데이터가 없으면 초기 상태로 설정
+          setStatus('waiting');
+          setSelectedSequences([]);
+          setCurrentSequenceIndex(-1);
+        }
+      } else {
+        console.log('저장된 상태 없음, 초기 상태로 설정');
+        setStatus('waiting');
+      }
+      
+      // 초기 로드 플래그 설정
+      initialStateLoaded.current = true;
+    } catch (error) {
+      console.error('로컬 스토리지에서 상태 로드 실패:', error);
+      // 오류 발생 시 초기 상태로 설정
+      setStatus('waiting');
+      setSelectedSequences([]);
+      setCurrentSequenceIndex(-1);
+    } finally {
+      // 처리 완료 플래그 해제
+      processingAction.current = false;
+    }
+  }, []);
+  
+  // resetAutomationRestore 함수 강화 (약 1975줄 근처)
+  const resetAutomationRestore = () => {
+    // 함수 내용 구현
+  };
+  
+  return (
+    <div className="p-4 space-y-4">
+      {/* 시퀀스 선택 및 컨트롤 영역 */}
+      <div className="flex items-center space-x-2 mb-4">
+        <Select
+          onValueChange={(value) => {
+            addSequence(value);
+            // 선택된 값을 유지하여 드롭다운이 계속 열려있도록 함
+          }}
+          disabled={false} // 항상 활성화
+        >
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="작업(extwork)" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableSequences.length > 0 ? (
+              availableSequences.map((name) => (
+                <SelectItem key={name} value={name}>
+                  {name}
+                </SelectItem>
+              ))
+            ) : (
+              <div className="text-xs text-center py-2 text-gray-500">
+                사용 가능한 시퀀스가 없습니다
+              </div>
+            )}
+          </SelectContent>
+        </Select>
+        
+        <div className="flex-1"></div>
+        
+        <Button 
+          variant="outline" 
+          size="sm"
+          onClick={() => setShowSaveDialog(true)}
+          disabled={selectedSequences.length === 0} // 시퀀스가 없으면 비활성화
+          className="gap-1 bg-blue-50 border-blue-300 hover:bg-blue-100 min-w-[180px] h-10"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 text-blue-600">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          <span className="font-semibold">Database에 저장</span>
+        </Button>
+        
+        <Button 
+          variant="outline" 
+          size="sm"
+          onClick={() => setShowLoadDialog(true)}
+          disabled={savedProcesses.length === 0} // 저장된 프로세스가 없으면 비활성화
+          className="gap-1 bg-green-50 border-green-300 hover:bg-green-100 min-w-[180px] h-10"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 text-green-600">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span className="font-semibold">Database에서 불러오기</span>
+        </Button>
+        
+        <Button 
+          variant="default" 
+          size="sm"
+          onClick={() => {
+            if (selectedSequences.length > 0) {
+              setStatus('running');
+              executeSequence(0);
+            }
+          }}
+          disabled={selectedSequences.length === 0} // 시퀀스가 없으면 비활성화
+          className="gap-1 min-w-[120px] h-10 bg-blue-600 hover:bg-blue-700"
+        >
+          <Play className="h-5 w-5" />
+          <span className="font-semibold">일괄 실행</span>
+        </Button>
+        
+        <Button 
+          onClick={enhancedResetAutomation}
+          variant="outline"
+          className="hidden sm:flex items-center gap-1 text-red-600 border-red-300 hover:text-red-700 hover:bg-red-50"
+        >
+          <Trash2 className="h-4 w-4" />
+          <span>리셋</span>
+        </Button>
+        
+        <Button 
+          variant="outline" 
+          size="sm"
+                          onClick={() => setShowTimePopup(null)}
+                        >
+                          취소
+                        </Button>
+                        <Button 
+                          variant="default" 
+                          size="sm"
+                          onClick={() => saveTimePopup(index)}
+                        >
+                          저장
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+      {/* 진행 정보 섹션 */}
+      <div className="p-2 bg-gray-50 rounded text-sm">
+        <p className="font-medium mb-1">진행 정보:</p>
+        <div className="flex flex-col">
+          {currentSequenceIndex >= 0 && currentSequenceIndex < selectedSequences.length && (
+            <div className="text-xs font-semibold mb-1 text-blue-600">
+              현재 시퀀스: {currentSequenceIndex + 1}/{selectedSequences.length} - {selectedSequences[currentSequenceIndex].sequence.name}
+              {selectedSequences[currentSequenceIndex].status === 'running' ? ' (실행중)' : 
+               selectedSequences[currentSequenceIndex].status === 'completed' ? ' (완료)' : 
+               selectedSequences[currentSequenceIndex].status === 'error' ? ' (오류)' : ' (대기중)'}
+               
+              {/* 대기 시간 카운트다운 표시 */}
+              {selectedSequences[currentSequenceIndex].status === 'waiting' && 
+                waitingCountdowns[currentSequenceIndex] > 0 && (
+                <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-800 rounded animate-pulse">
+                  대기중: {waitingCountdowns[currentSequenceIndex]}초
+                </span>
+              )}
+            </div>
+          )}
+          
+          {/* 다음 시퀀스의 대기 상태 표시 */}
+          {currentSequenceIndex >= 0 && 
+           currentSequenceIndex + 1 < selectedSequences.length && 
+           selectedSequences[currentSequenceIndex].status === 'running' && (
+            <div className="text-xs text-gray-600 mb-1">
+              다음 시퀀스: {selectedSequences[currentSequenceIndex + 1].sequence.name}
+              {selectedSequences[currentSequenceIndex + 1].waitTime > 0 && (
+                <span className="ml-2 text-amber-600">
+                  (대기 시간: {selectedSequences[currentSequenceIndex + 1].waitTime}초)
+                </span>
+              )}
+            </div>
+          )}
+          
+          <div className="text-xs text-gray-500">
+            {selectedSequences.filter(seq => seq.status === 'completed').length}개 완료 / 
+            {selectedSequences.filter(seq => seq.status === 'running').length}개 실행중 / 
+            {selectedSequences.filter(seq => seq.status === 'waiting').length}개 대기중 /
+            {selectedSequences.filter(seq => seq.status === 'error').length}개 오류
+            
+            {/* 전체 대기 시간 정보 */}
+            {Object.keys(waitingCountdowns).length > 0 && (
+              <div className="mt-1 text-amber-600">
+                {Object.entries(waitingCountdowns).map(([index, countdown]) => (
+                  <span key={index} className="mr-2">
+                    {selectedSequences[parseInt(index)].sequence.name} ({countdown}초 대기중)
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      
+      {/* PROCESS_PROGRESS_TOPIC 내용 출력 */}
+      <div className="p-2 bg-gray-100 rounded border border-gray-300 text-sm">
+        <p className="font-medium mb-1 text-sm">진행 상태 (Topic: {PROCESS_PROGRESS_TOPIC}):</p>
+        <div className="text-xs bg-white p-2 rounded h-20 overflow-y-auto font-mono">
+          {progress ? (
+            // 안전하게 메시지 표시 - JSON 객체인 경우 문자열로 변환
+            typeof progress === 'object' ? 
+              JSON.stringify(progress) : 
+              progress
+          ) : '진행 상태 메시지 대기 중...'}
+        </div>
+      </div>
+      
+      <div>
+        <p className="font-medium mb-1 text-sm">로그 메시지:</p>
+        <div className="p-2 bg-gray-50 rounded text-xs h-28 overflow-y-auto">
+          {logMessages.length === 0 ? (
+            <p className="text-gray-500">로그 없음</p>
+          ) : (
+            <ul className="space-y-1">
+              {logMessages.map((msg, idx) => (
+                <li key={idx}>{msg}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+      
+      {/* 큐 컨트롤 섹션 */}
+      <Card>
+        <CardHeader className="py-3">
+          <CardTitle className="flex justify-between items-center">
+            <span>Queue Control</span>
+            <div className="text-sm font-medium">
+              <span>Queue Status: {queueStatus ? `${queueStatus.count} items` : 'Unknown'}</span>
+            </div>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {/* 큐 컨트롤 버튼 */}
+            <div className="flex gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resumeQueueProcessing}
+                className="gap-1"
+              >
+                <Play className="h-4 w-4" />
+                Resume
+              </Button>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={pauseQueueProcessing}
+                className="gap-1"
+              >
+                <Square className="h-4 w-4" />
+                Pause
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={listQueue}
+                className="gap-1"
+              >
+                List
+              </Button>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={removeAllQueueItems}
+                className="gap-1"
+              >
+                Remove
+              </Button>
+              
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={clearQueue}
+                className="gap-1 ml-auto"
+              >
+                <X className="h-4 w-4" />
+                Clear Queue
+              </Button>
+            </div>
+
+            {/* 큐 상태 텍스트 박스 */}
+            <div className="border rounded-md p-2">
+              <div className="text-xs font-mono bg-black text-white p-2 rounded h-[160px] overflow-y-auto whitespace-pre">
+                {queueStatus ? 
+                  JSON.stringify(queueStatus, null, 2) : 
+                  'Waiting for queue status...\n\nTopic: extwork/extraction/queue/status'}
+              </div>
+            </div>
+            
+            {/* 큐 항목 목록 */}
+            {queueStatus && queueStatus.items && queueStatus.items.length > 0 ? (
+              <div className="border rounded-md">
+                <div className="p-2 space-y-2 max-h-[200px] overflow-y-auto">
+                  {queueStatus.items.map((item, index) => (
+                    <div
+                      key={item.id}
+                      className="p-2 border rounded-md flex items-center justify-between bg-white"
+                    >
+                      <div className="flex-1">
+                        <div className="flex justify-between items-center">
+                          <div className="font-medium">
+                            {index + 1}. {item.name}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {new Date(item.timestamp).toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeQueueItem(item.id)}
+                        className="h-8 w-8 p-0"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-4 text-gray-500">
+                {queueStatus ? 'No items in queue' : 'Loading queue status...'}
+              </div>
+            )}
+            
+            {/* 수동 명령 발행 */}
+            <div className="border-t pt-3 mt-3">
+              <p className="text-xs text-gray-500 mb-2">Manual Command (Topic: {EXTRACTION_INPUT_TOPIC})</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualCommand}
+                  onChange={(e) => setManualCommand(e.target.value)}
+                  placeholder="Enter command token"
+                  maxLength={25}
+                  className="flex-1 h-8 px-2 border rounded text-sm"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={publishManualCommand}
+                  className="gap-1"
+                >
+                  Publish
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      
+      {/* 자동화 공정 저장 다이얼로그 */}
+      <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>자동화 공정 KV Database에 저장</DialogTitle>
+            <DialogDescription>
+              현재 구성된 시퀀스들을 자동화 공정으로 저장합니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="process-name" className="text-right">
+                공정 이름
+              </Label>
+              <Input
+                id="process-name"
+                placeholder="자동화 공정 이름 입력"
+                value={processName}
+                onChange={(e) => setProcessName(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="process-description" className="text-right">
+                설명 (선택)
+              </Label>
+              <Input
+                id="process-description"
+                placeholder="공정에 대한 설명 (선택사항)"
+                value={processDescription}
+                onChange={(e) => setProcessDescription(e.target.value)}
+                className="col-span-3"
+              />
+            </div>
+            <div className="px-1 py-2 text-sm">
+              <span className="font-medium">포함된 시퀀스:</span>
+              <div className="mt-1 space-y-1 text-gray-500">
+                {selectedSequences.map((seq, index) => (
+                  <div key={seq.id}>
+                    {index + 1}. {seq.sequence.name} (반복: {seq.customRepeats}회, 대기: {formatTime(seq.waitTime)})
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="secondary">
+                취소
+              </Button>
+            </DialogClose>
+            <Button type="submit" onClick={saveProcess} disabled={isLoading || !processName.trim() || selectedSequences.length === 0} className="bg-blue-600 hover:bg-blue-700">
+              {isLoading ? (
+                <div className="flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  저장 중...
+                </div>
+              ) : (
+                '저장'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 자동화 공정 불러오기 다이얼로그 */}
+      <Dialog open={showLoadDialog} onOpenChange={setShowLoadDialog}>
+        <DialogContent className="sm:max-w-[525px]">
+          <DialogHeader>
+            <DialogTitle>자동화 공정 KV Database에서 불러오기</DialogTitle>
+            <DialogDescription>
+              저장된 자동화 공정 목록에서 불러올 공정을 선택하세요.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            {savedProcesses.length === 0 ? (
+              <div className="text-center py-6 text-gray-500">
+                저장된 자동화 공정이 없습니다.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
+                {savedProcesses.map((process) => (
+                  <div
+                    key={process.id}
+                    className={`p-3 border rounded-md cursor-pointer ${
+                      selectedProcessId === process.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+                    }`}
+                    onClick={() => setSelectedProcessId(process.id)}
+                  >
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-medium">{process.name}</div>
+                        {process.description && (
+                          <div className="text-xs text-gray-500 mt-1">{process.description}</div>
+                        )}
+                        <div className="text-xs text-gray-400 mt-1">
+                          시퀀스: {process.sequences.length}개, 
+                          생성일: {new Date(process.createdAt).toLocaleDateString()}
+                        </div>
+                      </div>
+                      {selectedProcessId === process.id && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowDeleteConfirm(true);
+                          }}
+                          className="h-7 w-7 p-0 text-red-500"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="secondary">
+                취소
+              </Button>
+            </DialogClose>
+            <Button type="submit" onClick={loadProcess} disabled={isLoading || !selectedProcessId} className="bg-green-600 hover:bg-green-700">
+              {isLoading ? (
+                <div className="flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  불러오는 중...
+                </div>
+              ) : (
+                '불러오기'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 삭제 확인 다이얼로그 */}
+      <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>자동화 공정 삭제</AlertDialogTitle>
+            <AlertDialogDescription>
+              정말로 이 자동화 공정을 삭제하시겠습니까?
+              이 작업은 되돌릴 수 없습니다.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction onClick={deleteProcess} className="bg-red-500 hover:bg-red-600">
+              삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+};
+
+export default AutomationProcess; 

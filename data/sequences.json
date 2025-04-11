@@ -1,0 +1,35 @@
+[
+  {
+    "name": "",
+    "operation_mode": 21,
+    "repeats": 1,
+    "process": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "selectedPumps": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  }
+]
