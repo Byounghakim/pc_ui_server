@@ -4,8 +4,8 @@ import dbTaskService from './db-task-service';
 import { broadcastMessage } from '../api/sync/route';
 import { v4 as uuidv4 } from 'uuid';
 import { WorkTask, WorkLog } from '../types';
-import { connectToDatabase, COLLECTIONS } from '../lib/db-connect';
-import redisStateManager from '../../lib/redis-client';
+import { connectToDatabase, COLLECTIONS } from '../lib/local-db-connect';
+import localStateManager from '../../lib/local-state-manager';
 
 // MQTT 서버 설정
 const MQTT_CONFIG = {
@@ -61,10 +61,8 @@ class MqttService {
         return;
       }
       
-      // Redis 상태 관리자 초기화
-      redisStateManager.initialize().catch(err => {
-        console.error('Redis 상태 관리자 초기화 실패:', err);
-      });
+      // 로컬 상태 관리자는 자동으로 초기화되므로 별도 초기화가 필요 없음
+      console.log('로컬 상태 관리자 사용 준비됨');
       
       // MQTT 클라이언트가 연결되지 않았으면 연결
       if (mqttClient && typeof mqttClient.isConnected === 'function' && !mqttClient.isConnected()) {
@@ -127,8 +125,8 @@ class MqttService {
       const messageStr = message.toString();
       console.log('밸브 상태 메시지 수신:', messageStr);
       
-      // Redis에 밸브 상태 저장
-      await redisStateManager.saveValveState(messageStr);
+      // 로컬 상태 관리자에 밸브 상태 저장
+      await localStateManager.saveValveState(messageStr);
       
       // 클라이언트에 실시간 상태 알림
       await broadcastMessage('valve', {
@@ -148,8 +146,8 @@ class MqttService {
       const messageStr = message.toString();
       console.log(`펌프 ${pumpId} 상태 메시지 수신:`, messageStr);
       
-      // Redis에 펌프 상태 저장
-      await redisStateManager.savePumpState(pumpId, messageStr);
+      // 로컬 상태 관리자에 펌프 상태 저장
+      await localStateManager.savePumpState(pumpId, messageStr);
       
       // 클라이언트에 실시간 상태 알림
       await broadcastMessage('pump', {

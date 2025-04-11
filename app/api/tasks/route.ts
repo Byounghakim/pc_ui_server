@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import dbTaskService from '../../services/db-task-service';
 import { WorkTask } from '../../types';
-import redisStateManager from '@/lib/redis-client';
+import localStateManager from '@/lib/local-state-manager';
 
 // 인증 확인 함수 (간단한 API 키 확인)
 function isAuthenticated(req: NextRequest): boolean {
@@ -20,8 +20,8 @@ export async function GET(request: Request) {
     const limitParam = url.searchParams.get('limit');
     const limit = limitParam ? parseInt(limitParam) : 100;
     
-    // Redis에서 작업 목록 조회
-    const tasks = await redisStateManager.listTasks(status, limit);
+    // 로컬 스토리지에서 작업 목록 조회
+    const tasks = await localStateManager.listTasks(status, limit);
     
     return NextResponse.json({ 
       success: true, 
@@ -50,8 +50,8 @@ export async function POST(request: Request) {
       );
     }
     
-    // Redis에 작업 저장
-    const taskId = await redisStateManager.saveTask({
+    // 로컬 스토리지에 작업 저장
+    const taskId = await localStateManager.saveTask({
       name: data.name,
       data: data.data || {},
       status: data.status || 'pending'

@@ -1140,6 +1140,17 @@ export default function Dashboard() {
         // 즉시 UI 업데이트를 위해 로컬에서도 처리
         console.log("[디버깅] 로컬에서 밸브 상태 메시지 파싱: ", mqttMessage);
         parseValveStateMessage(mqttMessage);
+        
+        // LocalStateManager에 밸브 상태 저장
+        try {
+          import('@/lib/local-state-manager').then(module => {
+            const localStateManager = module.default.getInstance();
+            localStateManager.saveValveState(mqttMessage);
+            console.log("[디버깅] 밸브 상태를 LocalStateManager에 저장: ", mqttMessage);
+          });
+        } catch (error) {
+          console.error("[디버깅] LocalStateManager에 밸브 상태 저장 실패: ", error);
+        }
       } else {
         console.log(`[디버깅] 알 수 없는 밸브 상태: ${newState}, 아무 동작도 하지 않음`);
       }

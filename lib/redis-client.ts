@@ -121,6 +121,51 @@ function createLocalStorageClient(): RedisClientType {
   
   const storageMap = new Map<string, string>();
   
+  // 로컬 스토리지에서 이전 상태 로드
+  const loadFromLocalStorage = () => {
+    if (typeof window !== 'undefined') {
+      try {
+        const savedState = localStorage.getItem('redisClientState');
+        if (savedState) {
+          const parsed = JSON.parse(savedState);
+          Object.entries(parsed).forEach(([key, value]) => {
+            storageMap.set(key, value as string);
+          });
+          console.log('로컬 스토리지에서 이전 상태 로드됨');
+        }
+      } catch (error) {
+        console.error('로컬 스토리지 로드 오류:', error);
+      }
+    }
+  };
+  
+  // 로컬 스토리지에 현재 상태 저장
+  const saveToLocalStorage = () => {
+    if (typeof window !== 'undefined') {
+      try {
+        const state: Record<string, string> = {};
+        storageMap.forEach((value, key) => {
+          state[key] = value;
+        });
+        localStorage.setItem('redisClientState', JSON.stringify(state));
+      } catch (error) {
+        console.error('로컬 스토리지 저장 오류:', error);
+      }
+    }
+  };
+  
+  // 초기 상태 로드
+  loadFromLocalStorage();
+  
+  // 자동 저장을 위한 타이머 설정
+  if (typeof window !== 'undefined') {
+    // 페이지 언로드 시 저장
+    window.addEventListener('beforeunload', saveToLocalStorage);
+    
+    // 30초마다 자동 저장
+    setInterval(saveToLocalStorage, 30000);
+  }
+  
   // Redis 클라이언트와 유사한 인터페이스를 가진 객체 반환
   const localClient = {
     isOpen: true,
@@ -128,7 +173,10 @@ function createLocalStorageClient(): RedisClientType {
     
     connect: async () => Promise.resolve(),
     disconnect: async () => Promise.resolve(),
-    quit: async () => Promise.resolve(),
+    quit: async () => {
+      saveToLocalStorage();
+      return Promise.resolve();
+    },
     
     get: async (key: string) => {
       console.log(`[LocalStorage] GET ${key}`);
@@ -138,12 +186,25 @@ function createLocalStorageClient(): RedisClientType {
     set: async (key: string, value: string) => {
       console.log(`[LocalStorage] SET ${key}`);
       storageMap.set(key, value);
+      
+      // 특정 키에 대해 즉시 로컬 스토리지에 저장
+      if (key === 'system:state' || key.includes('pump') || key.includes('valve')) {
+        saveToLocalStorage();
+      }
+      
       return 'OK';
     },
     
     del: async (key: string) => {
       console.log(`[LocalStorage] DEL ${key}`);
-      return storageMap.delete(key) ? 1 : 0;
+      const result = storageMap.delete(key) ? 1 : 0;
+      
+      // 키가 삭제되었으면 로컬 스토리지 업데이트
+      if (result > 0) {
+        saveToLocalStorage();
+      }
+      
+      return result;
     },
     
     // 기타 메서드들은 기본 구현으로 대체

@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { 
   connectToDatabase, 
   COLLECTIONS 
-} from '../lib/db-connect';
+} from '../lib/local-db-connect';
 import { WorkTask, SequenceStep } from '../types';
 
 // 작업 데이터베이스 서비스

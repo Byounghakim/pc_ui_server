@@ -1,9 +1,28 @@
 import { WorkTask } from '../types';
 
-// MongoDB 타입만 import (실제 구현은 서버 측에서만 사용)
-type MongoClient = any;
-type Db = any;
-type Collection = any;
+// 로컬 스토리지 데이터 저장/로드 헬퍼 함수
+const saveToLocalStorage = (key: string, data: any) => {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(key, JSON.stringify(data));
+    } catch (error) {
+      console.error(`로컬 스토리지 저장 오류 (${key}):`, error);
+    }
+  }
+};
+
+const loadFromLocalStorage = (key: string) => {
+  if (typeof window !== 'undefined') {
+    try {
+      const data = localStorage.getItem(key);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      console.error(`로컬 스토리지 로드 오류 (${key}):`, error);
+      return null;
+    }
+  }
+  return null;
+};
 
 // Vercel KV 또는 MongoDB 사용을 위한 인터페이스
 interface KVStore {
@@ -14,6 +33,159 @@ interface KVStore {
   hset: (hash: string, key: string, value: any) => Promise<void>;
   hdel: (hash: string, key: string) => Promise<void>;
   hgetall: (hash: string) => Promise<Record<string, any>>;
+}
+
+// 로컬 스토리지 기반 KV 스토어 (PC 용)
+class LocalKVStore implements KVStore {
+  // 싱글톤 패턴을 위한 인스턴스
+  private static instance: LocalKVStore;
+  
+  // 인메모리 저장소
+  private storage: Map<string, any> = new Map();
+  private hashStorage: Map<string, Map<string, any>> = new Map();
+  
+  // 로컬 스토리지 키
+  private LOCAL_STORAGE_KEY = 'localdb_keyvalues';
+  private LOCAL_STORAGE_HASH_KEY = 'localdb_hashes';
+  
+  constructor() {
+    console.log('로컬 KV 스토어 초기화...');
+    this.loadFromLocalStorage();
+    
+    // 페이지 언로드 시 데이터 저장
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', () => {
+        this.saveToLocalStorage();
+      });
+      
+      // 주기적으로 데이터 저장 (1분마다)
+      setInterval(() => this.saveToLocalStorage(), 60000);
+    }
+  }
+  
+  // 싱글톤 인스턴스 가져오기
+  public static getInstance(): LocalKVStore {
+    if (!LocalKVStore.instance) {
+      LocalKVStore.instance = new LocalKVStore();
+    }
+    return LocalKVStore.instance;
+  }
+  
+  // 로컬 스토리지로부터 데이터 로드
+  private loadFromLocalStorage() {
+    if (typeof window !== 'undefined') {
+      try {
+        // 키-값 데이터 로드
+        const keyValueData = localStorage.getItem(this.LOCAL_STORAGE_KEY);
+        if (keyValueData) {
+          const parsed = JSON.parse(keyValueData);
+          Object.entries(parsed).forEach(([key, value]) => {
+            this.storage.set(key, value);
+          });
+        }
+        
+        // 해시 데이터 로드
+        const hashData = localStorage.getItem(this.LOCAL_STORAGE_HASH_KEY);
+        if (hashData) {
+          const parsed = JSON.parse(hashData);
+          Object.entries(parsed).forEach(([hash, values]: [string, any]) => {
+            const hashMap = new Map<string, any>();
+            Object.entries(values).forEach(([key, value]) => {
+              hashMap.set(key, value);
+            });
+            this.hashStorage.set(hash, hashMap);
+          });
+        }
+        
+        console.log('로컬 스토리지에서 데이터 로드 완료');
+      } catch (error) {
+        console.error('로컬 스토리지에서 데이터 로드 오류:', error);
+      }
+    }
+  }
+  
+  // 로컬 스토리지에 데이터 저장
+  private saveToLocalStorage() {
+    if (typeof window !== 'undefined') {
+      try {
+        // 키-값 데이터 저장
+        const keyValueData: Record<string, any> = {};
+        this.storage.forEach((value, key) => {
+          keyValueData[key] = value;
+        });
+        localStorage.setItem(this.LOCAL_STORAGE_KEY, JSON.stringify(keyValueData));
+        
+        // 해시 데이터 저장
+        const hashData: Record<string, Record<string, any>> = {};
+        this.hashStorage.forEach((hashMap, hash) => {
+          hashData[hash] = {};
+          hashMap.forEach((value, key) => {
+            hashData[hash][key] = value;
+          });
+        });
+        localStorage.setItem(this.LOCAL_STORAGE_HASH_KEY, JSON.stringify(hashData));
+        
+        console.log('로컬 스토리지에 데이터 저장 완료');
+      } catch (error) {
+        console.error('로컬 스토리지에 데이터 저장 오류:', error);
+      }
+    }
+  }
+  
+  async get(key: string): Promise<any> {
+    console.log(`[로컬DB] GET ${key}`);
+    return this.storage.get(key) || null;
+  }
+
+  async set(key: string, value: any): Promise<void> {
+    console.log(`[로컬DB] SET ${key}`);
+    this.storage.set(key, value);
+    this.saveToLocalStorage();
+  }
+
+  async delete(key: string): Promise<void> {
+    console.log(`[로컬DB] DELETE ${key}`);
+    this.storage.delete(key);
+    this.saveToLocalStorage();
+  }
+
+  async hget(hash: string, key: string): Promise<any> {
+    console.log(`[로컬DB] HGET ${hash}:${key}`);
+    const hashMap = this.hashStorage.get(hash);
+    if (!hashMap) return null;
+    return hashMap.get(key) || null;
+  }
+
+  async hset(hash: string, key: string, value: any): Promise<void> {
+    console.log(`[로컬DB] HSET ${hash}:${key}`);
+    if (!this.hashStorage.has(hash)) {
+      this.hashStorage.set(hash, new Map());
+    }
+    const hashMap = this.hashStorage.get(hash)!;
+    hashMap.set(key, value);
+    this.saveToLocalStorage();
+  }
+
+  async hdel(hash: string, key: string): Promise<void> {
+    console.log(`[로컬DB] HDEL ${hash}:${key}`);
+    const hashMap = this.hashStorage.get(hash);
+    if (hashMap) {
+      hashMap.delete(key);
+      this.saveToLocalStorage();
+    }
+  }
+
+  async hgetall(hash: string): Promise<Record<string, any>> {
+    console.log(`[로컬DB] HGETALL ${hash}`);
+    const hashMap = this.hashStorage.get(hash);
+    if (!hashMap) return {};
+    
+    const result: Record<string, any> = {};
+    hashMap.forEach((value, key) => {
+      result[key] = value;
+    });
+    return result;
+  }
 }
 
 // 서버리스 환경에서 mock KV 스토어 (개발 환경용)
@@ -65,6 +237,11 @@ class MockKVStore implements KVStore {
     return result;
   }
 }
+
+// MongoDB 타입만 import (실제 구현은 서버 측에서만 사용)
+type MongoClient = any;
+type Db = any;
+type Collection = any;
 
 // MongoDB 클라이언트 및 연결 관리 (서버 컴포넌트에서만 동작)
 let mongoClient: MongoClient | null = null;
@@ -211,25 +388,14 @@ let kvStore: KVStore;
 
 // 초기화 함수
 const initKVStore = async (): Promise<KVStore> => {
-  // 클라이언트 측에서는 항상 Mock 스토어 사용
+  // 클라이언트 측에서는 로컬 스토리지 기반 스토어 사용
   if (typeof window !== 'undefined') {
-    console.log('클라이언트 환경에서 Mock 스토어를 사용합니다.');
-    return new MockKVStore();
+    console.log('PC 환경에서 로컬 스토리지 기반 스토어를 사용합니다.');
+    return LocalKVStore.getInstance();
   }
   
-  // 서버 측에서는 환경에 따라 스토어 선택
-  if (process.env.NODE_ENV === 'production') {
-    if (process.env.MONGODB_URI) {
-      console.log('MongoDB 스토어를 사용합니다.');
-      return await createMongoDBStore();
-    } else if (process.env.KV_REST_API_URL) {
-      console.log('Vercel KV 스토어를 사용합니다.');
-      // Vercel KV 스토어 구현은 여기에 추가
-      // return new VercelKVStore();
-    }
-  }
-  
-  console.log('개발 환경에서 Mock 스토어를 사용합니다.');
+  // 서버 측에서는 간단한 Mock 스토어 사용
+  console.log('서버 환경에서 Mock 스토어를 사용합니다.');
   return new MockKVStore();
 };
 
