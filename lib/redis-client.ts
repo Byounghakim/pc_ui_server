@@ -180,7 +180,12 @@ function createLocalStorageClient(): RedisClientType {
     
     get: async (key: string) => {
       console.log(`[LocalStorage] GET ${key}`);
-      return storageMap.get(key) || null;
+      const value = storageMap.get(key);
+      if (value === undefined) {
+        console.log(`[LocalStorage] 키 ${key}에 대한 값이 없습니다.`);
+        return null; // undefined 대신 null 반환
+      }
+      return value;
     },
     
     set: async (key: string, value: string) => {
@@ -244,4 +249,26 @@ export default {
   getRedisClient,
   checkRedisConnection,
   closeRedisConnection,
+  listAutomationProcesses: async () => {
+    try {
+      const client = await getRedisClient();
+      // 자동화 공정 목록 키
+      const key = 'automation:processes';
+      const data = await client.get(key);
+      
+      if (!data) return [];
+      
+      try {
+        const parsed = JSON.parse(data);
+        // Redis에 저장된 형식이 {"processes": [...]} 형태이므로
+        return parsed.processes || [];
+      } catch (parseError) {
+        console.error('자동화 공정 데이터 파싱 오류:', parseError);
+        return [];
+      }
+    } catch (error) {
+      console.error('자동화 공정 목록 조회 오류:', error);
+      return [];
+    }
+  },
 }; 
