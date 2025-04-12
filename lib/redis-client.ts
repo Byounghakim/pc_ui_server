@@ -53,8 +53,21 @@ export async function getRedisClient(): Promise<RedisClientType> {
     
     console.log(`Redis 연결 시도 (${connectionAttempts}/${MAX_RETRY_ATTEMPTS})...`);
     
-    const REDIS_URL = process.env.REDIS_URL || process.env.REDIS_URI || 'redis://localhost:6379';
+    // 개발 환경이나 로컬 환경에서는 퍼블릭 URL을 사용
+    const REDIS_HOST = process.env.REDISHOST || 'localhost';
+    const REDIS_PORT = process.env.REDISPORT || '6379';
+    const REDIS_PASSWORD = process.env.REDISPASSWORD || process.env.REDIS_PASSWORD || '';
+    const REDIS_USER = process.env.REDISUSER || 'default';
+    
+    // 우선 퍼블릭 URL 사용, 없으면 내부 URL 사용, 둘다 없으면 환경 변수로 구성
+    const REDIS_URL = process.env.REDIS_PUBLIC_URL || 
+                     process.env.REDIS_URL || 
+                     `redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}`;
+    
     console.log('Redis URL:', REDIS_URL.replace(/:\/\/.*@/, '://****@')); // URL에서 비밀번호 가리기
+    console.log('REDISHOST:', REDIS_HOST);
+    console.log('REDISPORT:', REDIS_PORT);
+    console.log('REDISUSER:', REDIS_USER);
     
     // 새 Redis 클라이언트 생성
     redisClient = createClient({
