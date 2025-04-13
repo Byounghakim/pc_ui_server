@@ -571,6 +571,10 @@ export default function Dashboard() {
       client.subscribe(PROCESS_PROGRESS_TOPIC);
       console.log("진행 상황 토픽 구독:", PROCESS_PROGRESS_TOPIC);
       
+      // 추출 명령 입력 토픽 구독 추가
+      client.subscribe("extwork/extraction/input");
+      console.log("추출 명령 입력 토픽 구독: extwork/extraction/input");
+      
       // 에러 토픽 구독
       client.subscribe(ERROR_TOPIC);
       console.log("에러 토픽 구독:", ERROR_TOPIC);
@@ -676,6 +680,38 @@ export default function Dashboard() {
       }
       
       try {
+        // 추출 명령 입력 토픽 처리
+        if (topic === 'extwork/extraction/input') {
+          console.log(`추출 입력 명령 수신: ${messageStr}`);
+          
+          try {
+            // JSON 데이터 파싱
+            const jsonData = JSON.parse(messageStr);
+            
+            // 시간 정보 추가
+            const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+            const displayMessage = `공정 명령: ${jsonData.name || jsonData.sequences?.[0]?.name || 'JSON 명령'} (${timeStr})`;
+            
+            // 공정 진행 계획 요약에 보여줄 메시지 업데이트
+            setProgressMessages(prev => [{
+              timestamp: Date.now(),
+              message: displayMessage,
+              rawJson: messageStr  // 원본 JSON을 그대로 저장(중요!)
+            }, ...prev].slice(0, 20));
+            
+            console.log(`추출 명령 처리됨: ${displayMessage}`);
+          } catch (error) {
+            console.error('JSON 파싱 오류:', error);
+            setProgressMessages(prev => [{
+              timestamp: Date.now(),
+              message: `잘못된 명령 형식: ${messageStr.substring(0, 50)}...`,
+              rawJson: null
+            }, ...prev].slice(0, 20));
+          }
+          
+          return;
+        }
+        
         // 토픽에 따른 처리
         if (topic.match(/extwork\/inverter(\d+)\/state/)) {
           const inverterId = Number.parseInt(topic.match(/extwork\/inverter(\d+)\/state/)![1]);
