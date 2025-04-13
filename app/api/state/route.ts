@@ -31,6 +31,36 @@ let cacheTimestamp: number = 0;
 const CACHE_TTL_MS = 300000; // 5분 캐싱
 
 /**
+ * 객체 깊은 병합 함수
+ */
+function deepMerge(target: any, source: any): any {
+  const output = Object.assign({}, target);
+  
+  if (isObject(target) && isObject(source)) {
+    Object.keys(source).forEach(key => {
+      if (isObject(source[key])) {
+        if (!(key in target)) {
+          Object.assign(output, { [key]: source[key] });
+        } else {
+          output[key] = deepMerge(target[key], source[key]);
+        }
+      } else {
+        Object.assign(output, { [key]: source[key] });
+      }
+    });
+  }
+  
+  return output;
+}
+
+/**
+ * 객체 타입 확인 함수
+ */
+function isObject(item: any): boolean {
+  return (item && typeof item === 'object' && !Array.isArray(item));
+}
+
+/**
  * 기본 시스템 상태 생성
  */
 function getDefaultState(): SystemState {
@@ -65,73 +95,45 @@ function getDefaultState(): SystemState {
  */
 export async function GET(req: NextRequest) {
   try {
-    console.log('시스템 상태 조회 시작');
-    
-    // 캐시 확인
-    const now = Date.now();
-    if (cachedState && (now - cacheTimestamp) < CACHE_TTL_MS) {
-      console.log('캐시된 상태 반환');
-      return NextResponse.json({
-        ...cachedState,
-        fromCache: true
-      });
+    const url = new URL(req.url);
+    const key = url.searchParams.get('key');
+
+    if (!key) {
+      return NextResponse.json({ error: 'state key가 필요합니다.' }, { status: 400 });
     }
-    
+
+    // Redis 클라이언트 가져오기
     const redis = await getRedisClient();
-    console.log('Redis 클라이언트 가져옴');
+    if (!redis || !redis.isOpen) {
+      return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
+    }
+
+    const stateStr = await redis.get(key);
     
-    // Redis에서 상태 가져오기
-    const data = await redis.get(STATE_KEY);
-    console.log('Redis 데이터 조회 완료:', data ? '데이터 있음' : '데이터 없음');
-    
-    // 연결 종료
-    await redis.quit();
-    
-    let stateData: SystemState = getDefaultState();
-    
-    if (data) {
-      try {
-        const parsedData = JSON.parse(data);
-        
-        // 데이터 병합
-        stateData = {
-          ...stateData,
-          ...parsedData,
-          timestamp: now
-        };
-        
-        // 펌프 상태가 문자열 형식(ON/OFF)인지 확인
-        if (stateData.pumps) {
-          Object.keys(stateData.pumps).forEach(pumpKey => {
-            const status = stateData.pumps[pumpKey];
-            stateData.pumps[pumpKey] = PUMP_STATUS[status] || status;
-          });
-        }
-      } catch (e) {
-        console.error('데이터 파싱 오류:', e);
-      }
+    if (!stateStr) {
+      return NextResponse.json({ state: null });
     }
     
-    // 캐시 업데이트
-    cachedState = { ...stateData };
-    cacheTimestamp = now;
+    // 'undefined' 문자열이거나 빈 문자열인 경우 처리
+    if (stateStr === 'undefined' || stateStr.trim() === '') {
+      console.warn(`유효하지 않은 상태 데이터 조회(${key}):`, stateStr);
+      return NextResponse.json({ state: null });
+    }
     
-    return NextResponse.json({
-      success: true,
-      ...stateData,
-      timestamp: now
-    });
+    try {
+      const state = JSON.parse(stateStr);
+      return NextResponse.json({ state });
+    } catch (parseError) {
+      console.error(`상태 데이터 파싱 오류(${key}):`, parseError, '원본 데이터:', stateStr);
+      return NextResponse.json({ 
+        error: '상태 데이터 파싱 오류', 
+        details: parseError instanceof Error ? parseError.message : String(parseError) 
+      }, { status: 500 });
+    }
   } catch (error) {
-    console.error('시스템 상태 조회 실패 상세:', error);
-    
-    // 기본 상태 반환
-    const defaultState = getDefaultState();
-    
-    return NextResponse.json({
-      success: false,
-      error: '시스템 상태 조회 실패',
-      details: error instanceof Error ? error.message : String(error),
-      ...defaultState
+    console.error('상태 조회 중 오류 발생:', error);
+    return NextResponse.json({ 
+      error: `상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
     }, { status: 500 });
   }
 }
@@ -141,92 +143,65 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    console.log('시스템 상태 저장 시작');
+    const body = await req.json();
+    const { key, state } = body;
+
+    if (!key) {
+      return NextResponse.json({ error: 'state key가 필요합니다.' }, { status: 400 });
+    }
+
+    if (!state) {
+      return NextResponse.json({ error: 'state 데이터가 필요합니다.' }, { status: 400 });
+    }
+
+    // Redis 클라이언트 가져오기
     const redis = await getRedisClient();
-    console.log('Redis 클라이언트 가져옴');
-    
-    // 요청 데이터 파싱
-    const data = await req.json();
-    console.log('받은 데이터:', JSON.stringify(data).substring(0, 200) + '...');
-    
-    // 데이터 유효성 검증
-    if (!data) {
-      console.log('유효하지 않은 데이터');
-      return NextResponse.json({
-        success: false,
-        error: '유효하지 않은 상태 데이터입니다.'
-      }, { status: 400 });
+    if (!redis || !redis.isOpen) {
+      return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
     }
-    
-    // Redis 연결 확인
-    console.log('Redis 연결 상태:', redis.isOpen ? '연결됨' : '연결 안됨');
-    
-    // Redis에 상태 저장
-    console.log('Redis에 저장 시작');
-    
-    // 펌프 또는 밸브 상태만 업데이트하는 경우 기존 데이터와 병합
-    const existingData = await redis.get(STATE_KEY);
-    let mergedData: SystemState = getDefaultState();
-    
-    if (existingData) {
-      try {
-        mergedData = JSON.parse(existingData);
-      } catch (e) {
-        console.error('기존 데이터 파싱 오류:', e);
+
+    // 기존 상태와 병합
+    try {
+      const existingStateStr = await redis.get(key);
+      let existingState = {};
+
+      if (existingStateStr) {
+        // 'undefined' 문자열이거나 빈 문자열인 경우 처리
+        if (existingStateStr === 'undefined' || existingStateStr.trim() === '') {
+          console.warn(`유효하지 않은 상태 데이터(${key}):`, existingStateStr);
+        } else {
+          try {
+            existingState = JSON.parse(existingStateStr);
+            if (typeof existingState !== 'object' || existingState === null) {
+              console.warn(`파싱된 상태가 객체가 아님(${key}):`, existingState);
+              existingState = {};
+            }
+          } catch (parseError) {
+            console.error(`기존 상태 파싱 오류(${key}):`, parseError, '원본 데이터:', existingStateStr);
+          }
+        }
       }
-    }
-    
-    // 새 데이터 병합
-    if (data.pump !== undefined && data.pumpId) {
-      // 단일 펌프 상태 업데이트
-      if (!mergedData.pumps) {
-        mergedData.pumps = {};
-      }
-      // 0/1 또는 ON/OFF 형식 지원
-      let pumpStatus = data.pump;
-      if (pumpStatus === 0 || pumpStatus === '0') pumpStatus = 'OFF';
-      if (pumpStatus === 1 || pumpStatus === '1') pumpStatus = 'ON';
+
+      // 새 상태와 깊은 병합
+      const mergedState = deepMerge(existingState, state);
       
-      mergedData.pumps[`pump${data.pumpId}`] = pumpStatus;
-      // 캐시 무효화
-      cachedState = null;
-    } else if (data.valve) {
-      // 밸브 상태 업데이트
-      mergedData.valve = {
-        state: data.valve,
-        description: data.description || { valveA: "알 수 없음", valveB: "알 수 없음" }
-      };
-      // 캐시 무효화
-      cachedState = null;
-    } else if (data.tankSystem) {
-      // 탱크 시스템 상태 업데이트
-      mergedData.tankSystem = data.tankSystem;
-      // 캐시 무효화
-      cachedState = null;
-    } else {
-      // 전체 상태 업데이트
-      mergedData = { ...mergedData, ...data, timestamp: Date.now() };
-      // 캐시 무효화
-      cachedState = null;
+      // 상태 저장
+      await redis.set(key, JSON.stringify(mergedState));
+      
+      return NextResponse.json({ 
+        success: true, 
+        message: 'State saved successfully' 
+      });
+    } catch (error) {
+      console.error('상태 저장 중 오류 발생:', error);
+      return NextResponse.json({ 
+        error: `상태 저장 중 오류: ${error instanceof Error ? error.message : String(error)}` 
+      }, { status: 500 });
     }
-    
-    await redis.set(STATE_KEY, JSON.stringify(mergedData));
-    console.log('Redis에 저장 완료');
-    
-    // 연결 종료
-    await redis.quit();
-    
-    return NextResponse.json({
-      success: true,
-      message: '시스템 상태가 성공적으로 저장되었습니다.',
-      ...mergedData
-    });
   } catch (error) {
-    console.error('시스템 상태 저장 실패 상세:', error);
-    return NextResponse.json({
-      success: false,
-      error: '시스템 상태 저장 실패',
-      details: error instanceof Error ? error.message : String(error)
+    console.error('요청 처리 중 오류 발생:', error);
+    return NextResponse.json({ 
+      error: `요청 처리 오류: ${error instanceof Error ? error.message : String(error)}` 
     }, { status: 500 });
   }
 }

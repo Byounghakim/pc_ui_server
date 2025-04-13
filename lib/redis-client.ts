@@ -286,14 +286,20 @@ export default {
       if (!data) return [];
       
       try {
+        // 비어있거나 undefined인 경우 체크
+        if (data === 'undefined' || data.trim() === '') {
+          console.warn('비어있거나 유효하지 않은 JSON 데이터:', data);
+          return [];
+        }
+        
         const parsed = JSON.parse(data);
         // Redis에 저장된 형식이 {"processes": [...]} 형태이므로
-        const processes = parsed.processes || [];
+        const processes = parsed && parsed.processes ? parsed.processes : [];
         
         // 제한된 수의 프로세스만 반환
         return processes.slice(0, limit);
       } catch (parseError) {
-        console.error('자동화 공정 데이터 파싱 오류:', parseError);
+        console.error('자동화 공정 데이터 파싱 오류:', parseError, '원본 데이터:', data);
         return [];
       }
     } catch (error) {
@@ -317,9 +323,15 @@ export default {
       if (!data) return null;
       
       try {
+        // 비어있거나 undefined인 경우 체크
+        if (data === 'undefined' || data.trim() === '') {
+          console.warn(`작업 ID(${taskId})에 대한 데이터가 유효하지 않음:`, data);
+          return null;
+        }
+        
         return JSON.parse(data);
       } catch (parseError) {
-        console.error(`작업 데이터 파싱 오류 (ID: ${taskId}):`, parseError);
+        console.error(`작업 데이터 파싱 오류 (ID: ${taskId}):`, parseError, '원본 데이터:', data);
         return null;
       }
     } catch (error) {
@@ -343,7 +355,19 @@ export default {
       if (!data) return [];
       
       try {
+        // 비어있거나 undefined인 경우 체크
+        if (data === 'undefined' || data.trim() === '') {
+          console.warn(`프로세스 ID(${processId})에 대한 실행 데이터가 유효하지 않음:`, data);
+          return [];
+        }
+        
         const executions = JSON.parse(data);
+        
+        // 배열이 아닌 경우 빈 배열 반환
+        if (!Array.isArray(executions)) {
+          console.warn(`프로세스 ID(${processId})에 대한 실행 데이터가 배열이 아님:`, executions);
+          return [];
+        }
         
         // 상태 필터링이 필요한 경우
         let filtered = executions;
@@ -354,7 +378,7 @@ export default {
         // 결과 제한
         return filtered.slice(0, limit);
       } catch (parseError) {
-        console.error(`공정 실행 데이터 파싱 오류 (ID: ${processId}):`, parseError);
+        console.error(`공정 실행 데이터 파싱 오류 (ID: ${processId}):`, parseError, '원본 데이터:', data);
         return [];
       }
     } catch (error) {

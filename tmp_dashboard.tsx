@@ -1377,161 +1377,204 @@ export default function Dashboard() {
 
   // 밸브 상태 파싱 함수
   const parseValveStateMessage = (message: string) => {
-    console.log(`[디버깅] 밸브 상태 메시지 파싱 시작: ${message}`);
+    console.log('[디버깅] 밸브 상태 메시지 파싱 시작:', message);
     
-    // 밸브 상태 메시지 형식 확인 (valveA=OFF(전체순환_교환), valveB=ON(열림)...)
-    if (message.includes('valveA=') && message.includes('valveB=')) {
-      console.log(`[디버깅] 밸브 상태 메시지 형식 감지: ${message}`);
-      
-      // valveA 상태 추출 (ON/OFF)
-      const valveAState = message.includes('valveA=ON') ? '1' : '0';
-      const valveBState = message.includes('valveB=ON') ? '1' : '0';
-      const valveCState = message.includes('valveC=ON') ? '1' : '0';
-      const valveDState = message.includes('valveD=ON') ? '1' : '0';
-      
-      // 밸브 설명 추출 (괄호 안의 내용)
-      let valveADesc = '';
-      let valveBDesc = '';
-      
-      // valveA 설명 추출
-      const valveADescMatch = message.match(/valveA=(?:ON|OFF)\(([^)]+)\)/);
-      if (valveADescMatch && valveADescMatch[1]) {
-        valveADesc = valveADescMatch[1];
-      } else {
-        // 기본 설명 설정
-        valveADesc = valveAState === '1' ? '추출순환' : '전체순환';
+    // 메시지가 유효하지 않거나 빈 문자열인 경우
+    if (!message || message.trim() === '' || message === 'undefined') {
+      console.warn('[디버깅] 유효하지 않은 밸브 상태 메시지:', message);
+      return { valveState: "0000", valveADesc: "알 수 없음", valveBDesc: "알 수 없음" };
+    }
+    
+    // 객체 형식으로 전송된 경우 ("현재 밸브 상태: ..." 같은 텍스트 형식으로 전송된 경우를 처리)
+    if (typeof message === 'string' && !message.match(/^[0-1]{4}$/)) {
+      try {
+        // JSON 형식인지 먼저 확인
+        if (message.trim().startsWith('{') && message.trim().endsWith('}')) {
+          try {
+            const jsonData = JSON.parse(message);
+            console.log('[디버깅] JSON 형식 밸브 상태 메시지 파싱 성공:', jsonData);
+            return parseValveStateObject(jsonData);
+          } catch (jsonError) {
+            console.error('[디버깅] JSON 형식 밸브 상태 메시지 파싱 실패:', jsonError);
+            // JSON 파싱 실패 시 문자열로 처리 시도
+          }
+        }
+        
+        // 문자열에서 밸브 상태 코드 추출 시도
+        const valveStateMatch = message.match(/([0-1]{4})/);
+        if (valveStateMatch) {
+          const valveStateCode = valveStateMatch[1];
+          console.log('[디버깅] 텍스트에서 밸브 상태 코드 추출 성공:', valveStateCode);
+          
+          // 추출된 코드로 밸브 상태 분석
+          return parseValveStateCode(valveStateCode);
+        }
+        
+        // "현재 밸브 상태: ..." 형식 처리
+        if (message.includes('밸브 상태:')) {
+          console.log('[디버깅] 텍스트 형식 밸브 상태 메시지 처리');
+          
+          // 기본 값 반환 (메시지가 parsable하지 않음)
+          return { 
+            valveState: "0000", 
+            messageText: message, 
+            valveADesc: "알 수 없음", 
+            valveBDesc: "알 수 없음"
+          };
+        }
+      } catch (error) {
+        console.error('[디버깅] 밸브 상태 메시지 파싱 오류:', error);
+        return { valveState: "0000", valveADesc: "알 수 없음", valveBDesc: "알 수 없음" };
       }
-      
-      // valveB 설명 추출
-      const valveBDescMatch = message.match(/valveB=(?:ON|OFF)\(([^)]+)\)/);
-      if (valveBDescMatch && valveBDescMatch[1]) {
-        valveBDesc = valveBDescMatch[1];
-      } else {
-        // 기본 설명 설정
-        valveBDesc = valveBState === '1' ? '열림' : '닫힘';
-      }
-      
-      console.log(`[디버깅] 밸브 상태 및 설명 추출: A=${valveAState}(${valveADesc}), B=${valveBState}(${valveBDesc})`);
-      
-      // 4자리 밸브 상태 코드 생성
-      const valveStateCode = `${valveAState}${valveBState}${valveCState}${valveDState}`;
-      
-      // 현재 활성화된 밸브 상태 저장 (버튼 스타일 변경에 사용)
-      setCurrentValveState(valveStateCode);
-      
-      setTankData(prev => {
-        const updatedState = {
-          ...prev,
-          valveState: valveStateCode,
-          valveADesc,
-          valveBDesc,
-          valveStatusMessage: message
-        };
-        
-        console.log('[디버깅] 업데이트될 탱크 데이터 상태', updatedState);
-        
-        // 업데이트된 상태 저장
-        saveStateToServer(updatedState);
-        
-        return updatedState;
-      });
-      
-      console.log('[디버깅] 상태 업데이트 함수 호출 완료');
-      
-      return {
-        valveState: valveStateCode,
-        valveAState,
-        valveBState, 
-        valveCState,
-        valveDState,
-        valveADesc,
-        valveBDesc
-      };
     }
     
     // 0100 형식의 메시지 처리 (밸브 상태 코드)
     if (message.match(/^[0-1]{4}$/)) {
-      // 4자리 0과 1 코드인 경우
-      console.log(`[디버깅] 밸브 상태 코드 감지: ${message}`);
+      return parseValveStateCode(message);
+    }
+    
+    // 코드 형식이 아닌 경우 기본 값 반환
+    console.log('[디버깅] 밸브 상태 메시지가 코드 형식이 아님, 기본값 반환');
+    return { valveState: "0000", messageText: message };
+  };
+  
+  // 밸브 상태 객체 파싱 함수
+  const parseValveStateObject = (data: any) => {
+    try {
+      const valveState = data.valveState || "0000";
       
       // 각 밸브 상태 추출
-      const valveAState = message[0];
-      const valveBState = message[1];
-      const valveCState = message[2];
-      const valveDState = message[3];
+      const valveAState = valveState[0] || '0';
+      const valveBState = valveState[1] || '0';
+      const valveCState = valveState[2] || '0';
+      const valveDState = valveState[3] || '0';
       
-      console.log(`[디버깅] 밸브 상태 추출: A=${valveAState}, B=${valveBState}, C=${valveCState}, D=${valveDState}`);
+      // 밸브 설명 생성
+      let valveADesc = data.valveADesc || '';
+      let valveBDesc = data.valveBDesc || '';
       
-      // 밸브 설명 설정 - 앞 두 자리에 따라 설명 결정
-      let valveADesc = '';
-      let valveBDesc = '';
-      
-      // 4가지 가능한 상태에 따른 설명 설정
-      if (message.startsWith('00')) {
-        // 0000: 전체순환
-        valveADesc = '전체순환';
-        valveBDesc = '닫힘';
-        console.log('[디버깅] 밸브 상태: 전체순환, 밸브B 닫힘');
-      } else if (message.startsWith('10')) {
-        // 1000: 추출순환
-        valveADesc = '추출순환';
-        valveBDesc = '닫힘';
-        console.log('[디버깅] 밸브 상태: 추출순환, 밸브B 닫힘');
-      } else if (message.startsWith('01')) {
-        // 0100: 본탱크 수집
-        valveADesc = '본탱크 수집';
-        valveBDesc = '열림';
-        console.log('[디버깅] 밸브 상태: 본탱크 수집, 밸브B 열림');
-      } else if (message.startsWith('11')) {
-        // 1100: 추출개방
-        valveADesc = '추출개방';
-        valveBDesc = '열림';
-        console.log('[디버깅] 밸브 상태: 추출개방, 밸브B 열림');
+      // 설명이 없는 경우 코드로부터 생성
+      if (!valveADesc || !valveBDesc) {
+        const descriptions = getValveDescriptions(valveState);
+        valveADesc = descriptions.valveADesc;
+        valveBDesc = descriptions.valveBDesc;
       }
       
-      console.log(`[디버깅] 밸브 상태 파싱 결과: A=${valveAState}(${valveADesc}), B=${valveBState}(${valveBDesc}), C=${valveCState}, D=${valveDState}`);
-      
-      // 현재 활성화된 밸브 상태 저장 (버튼 스타일 변경에 사용)
-      setCurrentValveState(message);
-      
-      // 탱크 데이터 상태 업데이트 전 로그
-      console.log('[디버깅] 탱크 데이터 상태 업데이트 전');
-      
-      setTankData(prev => {
-        const updatedState = {
-          ...prev,
-          valveState: message,
-          valveADesc,
-          valveBDesc,
-          valveStatusMessage: `valveA=${valveAState === '1' ? 'ON' : 'OFF'}, valveB=${valveBState === '1' ? 'ON' : 'OFF'}, valveC=${valveCState === '1' ? 'ON' : 'OFF'}, valveD=${valveDState === '1' ? 'ON' : 'OFF'}`
-        };
-        
-        console.log('[디버깅] 업데이트될 탱크 데이터 상태', updatedState);
-        
-        // 업데이트된 상태 저장
-        saveStateToServer(updatedState);
-        
-        return updatedState;
-      });
-      
-      console.log('[디버깅] 상태 업데이트 함수 호출 완료');
-      
-      // 밸브 상태 정보 반환
       return {
-        valveState: message,
+        valveState,
         valveAState,
-        valveBState, 
+        valveBState,
         valveCState,
         valveDState,
         valveADesc,
         valveBDesc
       };
+    } catch (error) {
+      console.error('[디버깅] 밸브 상태 객체 파싱 오류:', error);
+      return { valveState: "0000", valveADesc: "알 수 없음", valveBDesc: "알 수 없음" };
+    }
+  };
+  
+  // 밸브 상태 코드 파싱 함수
+  const parseValveStateCode = (message: string) => {
+    console.log(`[디버깅] 밸브 상태 코드 감지: ${message}`);
+    
+    // 각 밸브 상태 추출
+    const valveAState = message[0] || '0';
+    const valveBState = message[1] || '0';
+    const valveCState = message[2] || '0';
+    const valveDState = message[3] || '0';
+    
+    console.log(`[디버깅] 밸브 상태 추출: A=${valveAState}, B=${valveBState}, C=${valveCState}, D=${valveDState}`);
+    
+    // 밸브 설명 설정 - 앞 두 자리에 따라 설명 결정
+    let valveADesc = '';
+    let valveBDesc = '';
+    
+    // 4가지 가능한 상태에 따른 설명 설정
+    if (message.startsWith('00')) {
+      // 0000: 전체순환
+      valveADesc = '전체순환';
+      valveBDesc = '닫힘';
+      console.log('[디버깅] 밸브 상태: 전체순환, 밸브B 닫힘');
+    } else if (message.startsWith('10')) {
+      // 1000: 추출순환
+      valveADesc = '추출순환';
+      valveBDesc = '닫힘';
+      console.log('[디버깅] 밸브 상태: 추출순환, 밸브B 닫힘');
+    } else if (message.startsWith('01')) {
+      // 0100: 본탱크 수집
+      valveADesc = '본탱크 수집';
+      valveBDesc = '열림';
+      console.log('[디버깅] 밸브 상태: 본탱크 수집, 밸브B 열림');
+    } else if (message.startsWith('11')) {
+      // 1100: 추출개방
+      valveADesc = '추출개방';
+      valveBDesc = '열림';
+      console.log('[디버깅] 밸브 상태: 추출개방, 밸브B 열림');
     }
     
-    // 코드 형식이 아닌 경우 기본 값 반환
-    console.log('[디버깅] 밸브 상태 메시지가 코드 형식이 아님, 기본값 반환');
-    return { valveState: message };
-  }
+    console.log(`[디버깅] 밸브 상태 파싱 결과: A=${valveAState}(${valveADesc}), B=${valveBState}(${valveBDesc}), C=${valveCState}, D=${valveDState}`);
+    
+    // 현재 활성화된 밸브 상태 저장 (버튼 스타일 변경에 사용)
+    setCurrentValveState(message);
+    
+    // 탱크 데이터 상태 업데이트 전 로그
+    console.log('[디버깅] 탱크 데이터 상태 업데이트 전');
+    
+    setTankData(prev => {
+      const updatedState = {
+        ...prev,
+        valveState: message,
+        valveADesc,
+        valveBDesc,
+        valveStatusMessage: `valveA=${valveAState === '1' ? 'ON' : 'OFF'}, valveB=${valveBState === '1' ? 'ON' : 'OFF'}, valveC=${valveCState === '1' ? 'ON' : 'OFF'}, valveD=${valveDState === '1' ? 'ON' : 'OFF'}`
+      };
+      
+      console.log('[디버깅] 업데이트될 탱크 데이터 상태', updatedState);
+      
+      // 업데이트된 상태 저장
+      saveStateToServer(updatedState);
+      
+      return updatedState;
+    });
+    
+    console.log('[디버깅] 상태 업데이트 함수 호출 완료');
+    
+    // 밸브 상태 정보 반환
+    return {
+      valveState: message,
+      valveAState,
+      valveBState, 
+      valveCState,
+      valveDState,
+      valveADesc,
+      valveBDesc
+    };
+  };
+  
+  // 밸브 설명 코드 조회 함수
+  const getValveDescriptions = (valveState: string) => {
+    let valveADesc = '알 수 없음';
+    let valveBDesc = '알 수 없음';
+    
+    // 4가지 가능한 상태에 따른 설명 설정
+    if (valveState.startsWith('00')) {
+      valveADesc = '전체순환';
+      valveBDesc = '닫힘';
+    } else if (valveState.startsWith('10')) {
+      valveADesc = '추출순환';
+      valveBDesc = '닫힘';
+    } else if (valveState.startsWith('01')) {
+      valveADesc = '본탱크 수집';
+      valveBDesc = '열림';
+    } else if (valveState.startsWith('11')) {
+      valveADesc = '추출개방';
+      valveBDesc = '열림';
+    }
+    
+    return { valveADesc, valveBDesc };
+  };
 
   // K 버튼 활성화 상태 관리
   const [kButtonActive, setKButtonActive] = useState(false);
