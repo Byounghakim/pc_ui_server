@@ -1,12 +1,6 @@
 import { PumpSequence, WorkLog, AutomationProcess, LogRetentionPolicy } from '../types';
 
-// 환경에 따른 API 기본 URL 설정
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
-                     (typeof window !== 'undefined' ? 
-                       // 브라우저 환경에서는 상대 경로 사용
-                       '/api' : 
-                       // 서버 환경에서는 로컬 URL 사용
-                       'http://localhost:3003/api');
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3003/api';
 
 // 서버 연결 상태를 저장하는 변수
 let isServerConnected = false; // 기본값을 false로 설정
