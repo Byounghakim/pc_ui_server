@@ -533,12 +533,21 @@ class MqttClient {
       // 메시지 형식에 따라 파싱
       let valveState = "0000";
       
+      // "현재 밸브 상태" 문자열 처리
+      if (message.includes("현재 밸브 상태")) {
+        console.log("'현재 밸브 상태' 메시지 감지:", message);
+        // 밸브 상태 코드만 추출 시도 (4자리 숫자 찾기)
+        const match = message.match(/(\d{4})/);
+        if (match && match[1]) {
+          valveState = match[1];
+        }
+      }
       // 숫자 형식인 경우
-      if (/^\d+$/.test(message)) {
+      else if (/^\d+$/.test(message)) {
         valveState = message.padStart(4, '0');
       } 
       // JSON 형식인 경우
-      else if (message.startsWith('{')) {
+      else if (message.trim().startsWith('{') && message.trim().endsWith('}')) {
         try {
           const data = JSON.parse(message);
           valveState = data.valveState || "0000";

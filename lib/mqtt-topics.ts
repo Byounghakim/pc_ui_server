@@ -171,8 +171,20 @@ export function parseValveStateMessage(message: string, debug = false): any {
   if (debug) console.log("밸브 상태 메시지 파싱:", message);
   
   try {
+    // "현재 밸브 상태" 문자열을 포함하는 경우 특별 처리
+    if (message.includes("현재 밸브 상태")) {
+      if (debug) console.log("'현재 밸브 상태' 메시지 감지:", message);
+      // 밸브 상태 코드만 추출 시도
+      const match = message.match(/(\d{4})/);
+      if (match && match[1]) {
+        return { valveState: match[1], rawMessage: message };
+      }
+      // 코드를 찾지 못했다면 원본 메시지 반환
+      return { message, isTextMessage: true };
+    }
+  
     // JSON 형식 메시지 파싱
-    if (message.startsWith("{")) {
+    if (message.trim().startsWith("{") && message.trim().endsWith("}")) {
       const data = JSON.parse(message);
       if (debug) console.log("JSON 형식 메시지 파싱 결과:", data);
       return data;

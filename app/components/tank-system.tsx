@@ -2882,7 +2882,7 @@ export default function TankSystem({
     // 탱크 메시지 가져오기 - 모든 메시지 (텍스트 박스용)
     const tankMessage = tankData?.tankMessages?.[tankId];
     
-    // 타입 안전하게 operationTime 접근
+    // 퀴즈 안전하게 operationTime 접근
     const operationTime = tankData1 ? (tankData1 as any).operationTime : undefined;
     
     // 펌프 상태 확인 및 채워진 비율 계산 (직접 계산)
@@ -4184,8 +4184,15 @@ export default function TankSystem({
                           // 최신 JSON 데이터에서 펌프 진행 정보 찾기
                           const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                           if (latestJsonMsg && latestJsonMsg.rawJson) {
-                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            // 텍스트 메시지인 경우 건너뛰기
+                            if (latestJsonMsg.rawJson.includes("현재 밸브 상태") || 
+                                !latestJsonMsg.rawJson.trim().startsWith('{')) {
+                              console.log('밸브 상태 메시지는 JSON으로 파싱하지 않음:', latestJsonMsg.rawJson);
+                              return null;
+                            }
                             
+                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                           
                             // 대기 상태인 경우 - 고정 값으로 표시
                             if (jsonData.process_info === "waiting") {
                               const pumpId = jsonData.pump_id || 0;
@@ -4268,6 +4275,13 @@ export default function TankSystem({
                           // 최신 JSON 데이터에서 대기시간 정보 찾기
                           const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                           if (latestJsonMsg && latestJsonMsg.rawJson) {
+                            // "현재 밸브 상태" 문자열 체크
+                            if (latestJsonMsg.rawJson.includes("현재 밸브 상태") || 
+                                !latestJsonMsg.rawJson.trim().startsWith('{')) {
+                              console.log('밸브 상태 메시지는 JSON으로 파싱하지 않음:', latestJsonMsg.rawJson);
+                              return null;
+                            }
+                            
                             const jsonData = JSON.parse(latestJsonMsg.rawJson);
                             
                             // 대기 상태인 경우에 대기시간 카운터 표시
@@ -4306,63 +4320,36 @@ export default function TankSystem({
                           // 최신 JSON 데이터에서 대기시간 정보 찾기
                           const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                           if (latestJsonMsg && latestJsonMsg.rawJson) {
-                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            // 텍스트 메시지인 경우 건너뛰기
+                            if (latestJsonMsg.rawJson.includes("현재 밸브 상태") || 
+                                !latestJsonMsg.rawJson.trim().startsWith('{')) {
+                              return null;
+                            }
                             
-                            // 자동화 대기시간 표시 (automationWaitTime이 있으면 대기시간 표시)
-                            if (automationWaitTime && automationWaitTime.value > 0) {
-                              // max 값이 없어서 초기값을 계산해서 사용
-                              const initialTime = automationWaitTime.endTime ? Math.ceil((automationWaitTime.endTime - Date.now() + automationWaitTime.value * 1000) / 1000) : 60;
-                              const waitPercent = Math.min(100, Math.max(0, Math.floor(((initialTime - automationWaitTime.value) / initialTime) * 100)));
+                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            const totalTime = parseInt(String(jsonData.total_time), 10);
+                            const remainingTime = parseInt(String(jsonData.remaining_time), 10);
+                            
+                            if (!isNaN(remainingTime) && !isNaN(totalTime) && totalTime > 0) {
+                              const elapsedTime = totalTime - remainingTime;
+                              const waitPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / totalTime) * 100)));
                               
                               return (
                                 <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-purple-700 w-14">대기:</span>
+                                  <span className="text-[10px] font-medium text-blue-700 w-14">대기카운터:</span>
                                   <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
                                     <div 
-                                      className="h-full bg-purple-500 rounded-full transition-all duration-1000 ease-in-out"
+                                      className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-in-out"
                                       style={{ width: `${waitPercent}%` }}
                                     ></div>
                                   </div>
-                                  <span className="text-[9px] font-semibold text-purple-700">{automationWaitTime.value}초</span>
+                                  <span className="text-[9px] font-semibold text-blue-700">{remainingTime}초/{totalTime}초</span>
                                 </div>
                               );
                             }
-                            
-                            // total_remaining이 있으면 대기시간으로 표시
-                            if (jsonData.total_remaining && jsonData.process_time) {
-                              const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
-                              const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
-                              
-                              if (totalTime > 0 && totalRemaining > 0) {
-                                const waitPercent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
-                                
-                                // 시간 단위 계산 (시:분:초 형식)
-                                const hours = Math.floor(totalRemaining / 3600);
-                                const minutes = Math.floor((totalRemaining % 3600) / 60);
-                                const seconds = totalRemaining % 60;
-                                
-                                // 시간 포맷팅 (시간이 있으면 시:분:초, 없으면 분:초)
-                                const timeDisplay = hours > 0 
-                                  ? `${hours}시 ${minutes}분 ${seconds}초`
-                                  : `${minutes}분 ${seconds}초`;
-                                
-                                return (
-                                  <div className="flex items-center space-x-2">
-                                    <span className="text-[10px] font-medium text-purple-700 w-14">공정 종료:</span>
-                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                      <div 
-                                        className="h-full bg-purple-500 rounded-full transition-all duration-1000 ease-in-out"
-                                        style={{ width: `${waitPercent}%` }}
-                                      ></div>
-                                    </div>
-                                    <span className="text-[9px] font-semibold text-purple-700">{timeDisplay}</span>
-                                  </div>
-                                );
-                              }
-                            }
                           }
                         } catch (e) {
-                          console.error('Wait time parsing error:', e);
+                          console.error('Wait counter parsing error:', e);
                         }
                         return null;
                       })()}
@@ -4393,6 +4380,17 @@ export default function TankSystem({
                         <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[9px]">
                           {(() => {
                             try {
+                              // 텍스트 메시지인 경우 처리
+                              if (msg.rawJson.includes("현재 밸브 상태") || 
+                                  !msg.rawJson.trim().startsWith('{')) {
+                                return (
+                                  <div className="col-span-2">
+                                    <span className="font-semibold text-green-700">메시지:</span>{" "}
+                                    <span className="font-medium">{msg.rawJson}</span>
+                                  </div>
+                                );
+                              }
+                              
                               const jsonData = JSON.parse(msg.rawJson);
                               return (
                                 <>

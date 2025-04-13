@@ -13,6 +13,17 @@ let redisClient: RedisClientType | null = null;
 let isConnecting = false;
 let connectionAttempts = 0;
 const MAX_RETRY_ATTEMPTS = 3;
+// 로컬 테스트용 디버그 모드
+const DEBUG_MODE = process.env.REDIS_DEBUG === 'true';
+
+/**
+ * 디버그 로깅 함수
+ */
+function debugLog(...args: any[]) {
+  if (DEBUG_MODE) {
+    console.log('[Redis Debug]', ...args);
+  }
+}
 
 /**
  * Redis 클라이언트를 가져오는 함수
@@ -158,6 +169,24 @@ function createLocalStorageClient(): RedisClientType {
       } catch (error) {
         console.error('로컬 스토리지 로드 오류:', error);
       }
+    } else {
+      // 서버 사이드에서 파일 시스템으로 저장 시도
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const filePath = path.join(process.cwd(), 'local-redis-state.json');
+        
+        if (fs.existsSync(filePath)) {
+          const data = fs.readFileSync(filePath, 'utf8');
+          const parsed = JSON.parse(data);
+          Object.entries(parsed).forEach(([key, value]) => {
+            storageMap.set(key, value as string);
+          });
+          debugLog('파일 시스템에서 Redis 상태 로드됨');
+        }
+      } catch (error) {
+        console.error('파일 시스템에서 Redis 상태 로드 오류:', error);
+      }
     }
   };
   
@@ -170,8 +199,26 @@ function createLocalStorageClient(): RedisClientType {
           state[key] = value;
         });
         localStorage.setItem('redisClientState', JSON.stringify(state));
+        if (DEBUG_MODE) debugLog('로컬 스토리지에 상태 저장됨');
       } catch (error) {
         console.error('로컬 스토리지 저장 오류:', error);
+      }
+    } else {
+      // 서버 사이드에서 파일 시스템으로 저장
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const filePath = path.join(process.cwd(), 'local-redis-state.json');
+        
+        const state: Record<string, string> = {};
+        storageMap.forEach((value, key) => {
+          state[key] = value;
+        });
+        
+        fs.writeFileSync(filePath, JSON.stringify(state, null, 2), 'utf8');
+        if (DEBUG_MODE) debugLog('파일 시스템에 Redis 상태 저장됨');
+      } catch (error) {
+        console.error('파일 시스템에 Redis 상태 저장 오류:', error);
       }
     }
   };
@@ -201,21 +248,21 @@ function createLocalStorageClient(): RedisClientType {
     },
     
     get: async (key: string) => {
-      console.log(`[LocalStorage] GET ${key}`);
+      if (DEBUG_MODE) debugLog(`GET ${key}`);
       const value = storageMap.get(key);
       if (value === undefined) {
-        console.log(`[LocalStorage] 키 ${key}에 대한 값이 없습니다.`);
+        if (DEBUG_MODE) debugLog(`키 ${key}에 대한 값이 없습니다.`);
         return null; // undefined 대신 null 반환
       }
       return value;
     },
     
     set: async (key: string, value: string) => {
-      console.log(`[LocalStorage] SET ${key}`);
+      if (DEBUG_MODE) debugLog(`SET ${key}`);
       storageMap.set(key, value);
       
       // 특정 키에 대해 즉시 로컬 스토리지에 저장
-      if (key === 'system:state' || key.includes('pump') || key.includes('valve')) {
+      if (key === 'system:state' || key.includes('pump') || key.includes('valve') || key.includes('automation') || key.includes('task') || key.includes('process')) {
         saveToLocalStorage();
       }
       
@@ -223,7 +270,7 @@ function createLocalStorageClient(): RedisClientType {
     },
     
     del: async (key: string) => {
-      console.log(`[LocalStorage] DEL ${key}`);
+      if (DEBUG_MODE) debugLog(`DEL ${key}`);
       const result = storageMap.delete(key) ? 1 : 0;
       
       // 키가 삭제되었으면 로컬 스토리지 업데이트
@@ -232,6 +279,16 @@ function createLocalStorageClient(): RedisClientType {
       }
       
       return result;
+    },
+    
+    // 로컬 테스트를 위한 메서드 추가
+    debugDump: () => {
+      const state: Record<string, string> = {};
+      storageMap.forEach((value, key) => {
+        state[key] = value;
+      });
+      console.log('로컬 Redis 상태 덤프:', JSON.stringify(state, null, 2));
+      return state;
     },
     
     // 기타 메서드들은 기본 구현으로 대체
@@ -295,6 +352,12 @@ export default {
         const parsed = JSON.parse(data);
         // Redis에 저장된 형식이 {"processes": [...]} 형태이므로
         const processes = parsed && parsed.processes ? parsed.processes : [];
+        
+        // 배열이 아닌 경우 빈 배열 반환
+        if (!Array.isArray(processes)) {
+          console.warn('자동화 공정 데이터가 배열이 아님:', processes);
+          return [];
+        }
         
         // 제한된 수의 프로세스만 반환
         return processes.slice(0, limit);
