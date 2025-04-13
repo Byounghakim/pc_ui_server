@@ -4071,11 +4071,20 @@ export default function TankSystem({
                                   // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
                                   percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
                                 }
+                              } else if (jsonData.process_info === "waiting" && localStorage.getItem('lastProgressPercent')) {
+                                // 대기 중일 때 마지막으로 계산된 진행률 사용
+                                percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
                               }
                             }
                           } catch (e) {
                             console.error('Progress calculation error:', e);
-                            // 에러 발생 시 기본값 유지
+                            // 에러 발생 시 로컬 스토리지에서 마지막 계산된 값 불러오기
+                            percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
+                          }
+                          
+                          // 진행률 값이 있으면 로컬 스토리지에 저장
+                          if (percent > 0) {
+                            localStorage.setItem('lastProgressPercent', percent.toString());
                           }
                           
                           return (
