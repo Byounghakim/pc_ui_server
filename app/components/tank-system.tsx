@@ -768,6 +768,10 @@ export default function TankSystem({
               };
               console.log(`탱크 ${tankId} 메시지 업데이트: "${displayMessage}"`);
               
+              // 원본 메시지를 localStorage에 저장하여 다음 갱신까지 유지
+              localStorage.setItem(`tank_${tankId}_last_message`, messageStr);
+              console.log(`원본 메시지 저장: tank_${tankId}_last_message = "${messageStr}"`);
+              
               // 텍스트 박스용 메시지 저장
               localStorage.setItem(`tank_${tankId}_message`, displayMessage);
               
@@ -1510,12 +1514,21 @@ export default function TankSystem({
     if (tankId === 0 && mainTankMessage) {
       return mainTankMessage;
     }
+
+    // tankId가 유효한 경우 이전에 저장된 메시지가 있는지 확인
+    if (tankId !== undefined) {
+      const savedMessage = localStorage.getItem(`tank_${tankId}_last_message`);
+      if (savedMessage) {
+        return savedMessage;
+      }
+    }
+
     // 기본 탱크 상태 메시지 로직
     switch (status) {
       case "full":
         return "가득채워짐";
       case "empty":
-        return level <= 5 ? "비어있음(5%미만)" : "5% 이상 잔여";
+        return "준비중"; // 초기값을 "준비중"으로 변경
       case "filling":
         return `채워지는 중 (${Math.round(fillPercentage)}%)`;
       default:
@@ -3273,6 +3286,49 @@ export default function TankSystem({
       // 필요한 경우 클린업 로직
     };
   }, [pumpProgressInfo]); // pumpProgressInfo가 변경될 때만 실행
+
+  useEffect(() => {
+    if (!mqttClient) {
+      // MQTT 클라이언트 연결 안 된 상태
+      console.log('MQTT 클라이언트가 연결되지 않았습니다. 초기 상태로 설정합니다.');
+      
+      // 초기 탱크 메시지 설정 - "준비중"으로 설정하고 localStorage에 저장된 이전 메시지 복원
+      setTankMessages(prev => {
+        const initialMessages = { ...prev };
+        
+        // 모든 탱크 메시지를 "준비중"으로 초기화
+        for (let i = 1; i <= 6; i++) {
+          // localStorage에서 저장된 메시지 확인
+          const savedMessage = localStorage.getItem(`tank_${i}_message`);
+          
+          if (savedMessage) {
+            // 저장된 메시지가 있으면 사용
+            initialMessages[i] = savedMessage;
+            console.log(`탱크 ${i} 메시지 복원: "${savedMessage}"`);
+          } else {
+            // 저장된 메시지가 없으면 "준비중"으로 설정
+            initialMessages[i] = "준비중";
+            console.log(`탱크 ${i} 메시지 초기화: "준비중"`);
+          }
+        }
+        
+        return initialMessages;
+      });
+    }
+  }, [mqttClient]);
+
+  // MQTT 클라이언트 연결 상태 변경 시 실행
+  useEffect(() => {
+    // ... existing code ...
+  }, [mqttClient?.connected]);
+
+  // 탱크 구독 설정
+  useEffect(() => {
+    if (!mqttClient?.connected || !tankData?.tanks) return;
+    
+    // 자동 공급 상태 구독
+    // ... existing code ...
+  }, [mqttClient?.connected, tankData?.tanks]);
 
   return (
     <div className="relative w-full h-[950px] bg-white rounded-lg shadow-sm overflow-hidden border border-gray-100">
