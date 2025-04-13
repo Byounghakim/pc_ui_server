@@ -17,26 +17,55 @@ export async function GET(req: NextRequest) {
     const limitParam = url.searchParams.get('limit');
     const limit = limitParam ? parseInt(limitParam) : 100;
     
+    // Redis 연결 확인
+    const client = await redisStateManager.getRedisClient();
+    if (!client || !client.isOpen) {
+      console.error('Redis 연결 실패 - automation API');
+      return NextResponse.json({ 
+        success: true, 
+        data: [] // 연결 실패 시 빈 배열 반환
+      });
+    }
+    
     // Redis에서 자동화 공정 목록 조회
     const processes = await redisStateManager.listAutomationProcesses(limit);
     
+    // processes가 undefined인 경우 빈 배열로 처리
+    const processList = processes || [];
+    
     // 각 공정에 대한 추가 정보 로드 (파이프라인을 사용할 수 있지만 간결성을 위해 생략)
-    const enhancedProcesses = await Promise.all(processes.map(async (process) => {
-      // 각 작업 ID에 대한 작업 객체 조회
-      const tasks = await Promise.all(process.taskIds.map(async (taskId) => {
-        return await redisStateManager.getTask(taskId);
-      }));
-      
-      // 실행 중인 인스턴스가 있는지 확인
-      const executions = await redisStateManager.listProcessExecutions(process.id, 'running', 1);
-      const isRunning = executions.length > 0;
-      
-      return {
-        ...process,
-        tasks: tasks.filter(t => t !== null), // null 값 제거
-        isRunning,
-        activeExecution: isRunning ? executions[0] : null
-      };
+    const enhancedProcesses = await Promise.all(processList.map(async (process) => {
+      try {
+        // 각 작업 ID에 대한 작업 객체 조회
+        const tasks = await Promise.all((process.taskIds || []).map(async (taskId) => {
+          try {
+            return await redisStateManager.getTask(taskId);
+          } catch (e) {
+            console.error(`작업 정보 로드 실패 (ID: ${taskId}):`, e);
+            return null;
+          }
+        }));
+        
+        // 실행 중인 인스턴스가 있는지 확인
+        let executions = [];
+        try {
+          executions = await redisStateManager.listProcessExecutions(process.id, 'running', 1);
+        } catch (e) {
+          console.error(`실행 인스턴스 로드 실패 (processId: ${process.id}):`, e);
+        }
+        
+        const isRunning = executions && executions.length > 0;
+        
+        return {
+          ...process,
+          tasks: tasks.filter(t => t !== null), // null 값 제거
+          isRunning,
+          activeExecution: isRunning ? executions[0] : null
+        };
+      } catch (e) {
+        console.error(`공정 정보 처리 실패 (ID: ${process.id}):`, e);
+        return process; // 기본 정보만 포함
+      }
     }));
     
     return NextResponse.json({ 
@@ -45,8 +74,9 @@ export async function GET(req: NextRequest) {
     });
   } catch (error) {
     console.error('자동화 공정 목록 조회 API 오류:', error);
+    // 오류 발생 시에도 유효한 JSON 반환
     return NextResponse.json(
-      { success: false, error: '자동화 공정 목록을 불러오는 중 오류가 발생했습니다.' },
+      { success: false, error: '자동화 공정 목록을 불러오는 중 오류가 발생했습니다.', data: [] },
       { status: 500 }
     );
   }

@@ -7,8 +7,8 @@ REDIS_PASSWORD=evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm
 REDISHOST=interchange.proxy.rlwy.net
 REDISPORT=20220
 
-# API 서버 설정
-NEXT_PUBLIC_API_URL=https://extwork-production.up.railway.app/api
+# API 서버 설정 - 중요: 실제 배포된 URL로 설정해야 함
+NEXT_PUBLIC_API_URL=https://extworkserver-production.up.railway.app/api
 API_KEY=test-api-key
 
 # Redis 연결 모드 (Railway에서는 항상 false로 설정)
@@ -16,6 +16,10 @@ USE_LOCAL_STORAGE=false
 
 # 포트 설정 (Railway에서 중요)
 PORT=3000
+
+# 오류 처리 환경 변수 - 진단 정보 활성화
+DEBUG=redis:*,app:*
+NODE_ENV=production
 
 # 빌드 설정
 DISABLE_ESLINT_PLUGIN=true

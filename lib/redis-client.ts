@@ -271,9 +271,14 @@ export default {
   getRedisClient,
   checkRedisConnection,
   closeRedisConnection,
-  listAutomationProcesses: async () => {
+  listAutomationProcesses: async (limit = 100) => {
     try {
       const client = await getRedisClient();
+      if (!client || !client.isOpen) {
+        console.error('Redis 클라이언트가 연결되지 않음 - listAutomationProcesses');
+        return [];
+      }
+      
       // 자동화 공정 목록 키
       const key = 'automation:processes';
       const data = await client.get(key);
@@ -283,7 +288,10 @@ export default {
       try {
         const parsed = JSON.parse(data);
         // Redis에 저장된 형식이 {"processes": [...]} 형태이므로
-        return parsed.processes || [];
+        const processes = parsed.processes || [];
+        
+        // 제한된 수의 프로세스만 반환
+        return processes.slice(0, limit);
       } catch (parseError) {
         console.error('자동화 공정 데이터 파싱 오류:', parseError);
         return [];
@@ -293,4 +301,67 @@ export default {
       return [];
     }
   },
+  
+  // 작업 정보 가져오기
+  getTask: async (taskId) => {
+    try {
+      const client = await getRedisClient();
+      if (!client || !client.isOpen) {
+        console.error('Redis 클라이언트가 연결되지 않음 - getTask');
+        return null;
+      }
+      
+      const key = `task:${taskId}`;
+      const data = await client.get(key);
+      
+      if (!data) return null;
+      
+      try {
+        return JSON.parse(data);
+      } catch (parseError) {
+        console.error(`작업 데이터 파싱 오류 (ID: ${taskId}):`, parseError);
+        return null;
+      }
+    } catch (error) {
+      console.error(`작업 정보 조회 오류 (ID: ${taskId}):`, error);
+      return null;
+    }
+  },
+  
+  // 공정 실행 인스턴스 목록 조회
+  listProcessExecutions: async (processId, status = null, limit = 10) => {
+    try {
+      const client = await getRedisClient();
+      if (!client || !client.isOpen) {
+        console.error('Redis 클라이언트가 연결되지 않음 - listProcessExecutions');
+        return [];
+      }
+      
+      const key = `process:${processId}:executions`;
+      const data = await client.get(key);
+      
+      if (!data) return [];
+      
+      try {
+        const executions = JSON.parse(data);
+        
+        // 상태 필터링이 필요한 경우
+        let filtered = executions;
+        if (status) {
+          filtered = executions.filter(exec => exec.status === status);
+        }
+        
+        // 결과 제한
+        return filtered.slice(0, limit);
+      } catch (parseError) {
+        console.error(`공정 실행 데이터 파싱 오류 (ID: ${processId}):`, parseError);
+        return [];
+      }
+    } catch (error) {
+      console.error(`공정 실행 목록 조회 오류 (ID: ${processId}):`, error);
+      return [];
+    }
+  },
+  
+  // 여기에 필요한 추가 메소드 구현...
 }; 
