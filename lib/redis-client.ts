@@ -250,8 +250,8 @@ function createLocalStorageClient(): RedisClientType {
     get: async (key: string) => {
       if (DEBUG_MODE) debugLog(`GET ${key}`);
       const value = storageMap.get(key);
-      if (value === undefined) {
-        if (DEBUG_MODE) debugLog(`키 ${key}에 대한 값이 없습니다.`);
+      if (value === undefined || value === 'undefined') {
+        if (DEBUG_MODE) debugLog(`키 ${key}에 대한 값이 없거나 유효하지 않습니다.`);
         return null; // undefined 대신 null 반환
       }
       return value;

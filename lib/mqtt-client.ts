@@ -13,7 +13,7 @@ const saveState = (key: string, state: any) => {
 const loadState = (key: string) => {
   if (typeof window !== 'undefined') {
     const savedState = localStorage.getItem(key);
-    if (savedState) {
+    if (savedState && savedState !== 'undefined') {
       try {
         return JSON.parse(savedState);
       } catch (e) {

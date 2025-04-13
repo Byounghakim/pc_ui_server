@@ -105,6 +105,119 @@ const loadState = () => {
     try {
       const storedState = localStorage.getItem('tankSystemState');
       
+      if (storedState && storedState !== 'undefined') {
+        return JSON.parse(storedState);
+      }
+      
+      return null;
+    } catch (error) {
+"use client"
+import { motion } from "framer-motion"
+import { useEffect, useState, useRef, useCallback } from "react"
+import { MqttClient } from "mqtt"
+import { cn } from '@/lib/utils';
+import "./tank-system.css"; // 새로 생성한 CSS 파일 import
+import { PROCESS_PROGRESS_TOPIC, AUTOMATION_STATUS_TOPIC } from "@/lib/mqtt-topics"; // MQTT 토픽 import
+import { Tank } from '@/interface/tank'; // Tank 인터페이스만 임포트
+
+// 고유 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  if (typeof window === 'undefined') return 'server';
+  return `client_${Math.random().toString(36).substring(2, 15)}`;
+};
+
+// 시스템 상태 저장 및 불러오기 함수 개선
+const saveState = async (stateToSave: any) => {
+  try {
+    // 로컬 스토리지에 상태 저장
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
+      
+      // IndexedDB에도 저장
+      if (typeof saveToIndexedDB === 'function') {
+        saveToIndexedDB(stateToSave);
+      }
+      
+      // 다른 탭/창에 상태 변경 알림
+      localStorage.setItem('tankSystemStateUpdate', Date.now().toString());
+    }
+  } catch (error) {
+    console.error('상태 저장 실패:', error);
+  }
+};
+
+// IndexedDB에 상태 저장
+const saveToIndexedDB = (state: any) => {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    console.warn('IndexedDB를 사용할 수 없습니다.');
+    return;
+  }
+  
+  try {
+    const request = window.indexedDB.open('TankSystemDB', 1);
+    
+    request.onupgradeneeded = function(event) {
+      try {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('systemState')) {
+          db.createObjectStore('systemState', { keyPath: 'id' });
+        }
+      } catch (error) {
+        console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+        // 오류가 발생해도 계속 진행
+      }
+    };
+    
+    request.onsuccess = function(event) {
+      try {
+        const db = request.result;
+        const transaction = db.transaction(['systemState'], 'readwrite');
+        const store = transaction.objectStore('systemState');
+        
+        // 항상 같은 키로 저장하여 최신 상태만 유지
+        const putRequest = store.put({
+          id: 'currentState',
+          data: state,
+          timestamp: Date.now()
+        });
+        
+        putRequest.onsuccess = function() {
+          console.log('IndexedDB에 상태 저장 성공');
+        };
+        
+        putRequest.onerror = function(event) {
+          console.warn('IndexedDB 데이터 저장 중 오류:', event);
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+        
+        transaction.onerror = function(event) {
+          console.warn('IndexedDB 트랜잭션 오류:', event);
+        };
+      } catch (error) {
+        console.error('IndexedDB 트랜잭션 생성 중 오류:', error);
+      }
+    };
+    
+    request.onerror = function(event) {
+      console.warn('IndexedDB 열기 오류:', event);
+    };
+  } catch (error) {
+    console.error('IndexedDB 접근 중 예상치 못한 오류:', error);
+  }
+};
+
+// 상태 불러오기 함수 개선
+const loadState = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storedState = localStorage.getItem('tankSystemState');
+      
       if (storedState) {
         return JSON.parse(storedState);
       }
@@ -4081,6 +4194,12 @@ export default function TankSystem({
                           // 최신 JSON 데이터에서 repetition 찾기
                           const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                           if (latestJsonMsg && latestJsonMsg.rawJson) {
+                            // 텍스트 메시지인 경우 건너뛰기
+                            if (latestJsonMsg.rawJson.includes("현재 밸브 상태") || 
+                                !latestJsonMsg.rawJson.trim().startsWith('{')) {
+                              return `${Math.floor(fillPercentage)}%`;
+                            }
+                            
                             const jsonData = JSON.parse(latestJsonMsg.rawJson);
                             if (jsonData.repetition_count && jsonData.repetition) {
                               return `${jsonData.repetition_count - jsonData.repetition}회 남음`;
@@ -4117,19 +4236,26 @@ export default function TankSystem({
                           try {
                             const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                             if (latestJsonMsg && latestJsonMsg.rawJson) {
-                              const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                              // process_time과 total_remaining으로 진행률 계산
-                              if (jsonData.process_time && jsonData.total_remaining) {
-                                const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
-                                const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
-                                
-                                if (totalTime > 0 && totalRemaining >= 0) {
-                                  // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
-                                  percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
-                                }
-                              } else if (jsonData.process_info === "waiting" && localStorage.getItem('lastProgressPercent')) {
-                                // 대기 중일 때 마지막으로 계산된 진행률 사용
+                              // 텍스트 메시지인 경우 건너뛰기
+                              if (latestJsonMsg.rawJson.includes("현재 밸브 상태") || 
+                                  !latestJsonMsg.rawJson.trim().startsWith('{')) {
+                                console.log('밸브 상태 메시지는 JSON으로 파싱하지 않음:', latestJsonMsg.rawJson);
+                                // 마지막으로 저장된 값 사용
                                 percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
+                              } else {
+                                const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                                if (jsonData.process_time && jsonData.total_remaining) {
+                                  const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
+                                  const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
+                                  
+                                  if (totalTime > 0 && totalRemaining >= 0) {
+                                    // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
+                                    percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
+                                  }
+                                } else if (jsonData.process_info === "waiting" && localStorage.getItem('lastProgressPercent')) {
+                                  // 대기 중일 때 마지막으로 계산된 진행률 사용
+                                  percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
+                                }
                               }
                             }
                           } catch (e) {
