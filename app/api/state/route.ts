@@ -125,14 +125,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ state });
     } catch (parseError) {
       console.error(`상태 데이터 파싱 오류(${key}):`, parseError, '원본 데이터:', stateStr);
-      return NextResponse.json({ 
+    return NextResponse.json({
         error: '상태 데이터 파싱 오류', 
         details: parseError instanceof Error ? parseError.message : String(parseError) 
       }, { status: 500 });
     }
   } catch (error) {
     console.error('상태 조회 중 오류 발생:', error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: `상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
     }, { status: 500 });
   }
@@ -187,9 +187,9 @@ export async function POST(req: NextRequest) {
       
       // 상태 저장
       await redis.set(key, JSON.stringify(mergedState));
-      
-      return NextResponse.json({ 
-        success: true, 
+    
+    return NextResponse.json({
+      success: true,
         message: 'State saved successfully' 
       });
     } catch (error) {
@@ -200,7 +200,7 @@ export async function POST(req: NextRequest) {
     }
   } catch (error) {
     console.error('요청 처리 중 오류 발생:', error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: `요청 처리 오류: ${error instanceof Error ? error.message : String(error)}` 
     }, { status: 500 });
   }

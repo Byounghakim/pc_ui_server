@@ -4130,18 +4130,18 @@ export default function TankSystem({
                                 // 마지막으로 저장된 값 사용
                                 percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
                               } else {
-                                const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                                if (jsonData.process_time && jsonData.total_remaining) {
-                                  const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
-                                  const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
-                                  
-                                  if (totalTime > 0 && totalRemaining >= 0) {
-                                    // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
-                                    percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
-                                  }
-                                } else if (jsonData.process_info === "waiting" && localStorage.getItem('lastProgressPercent')) {
-                                  // 대기 중일 때 마지막으로 계산된 진행률 사용
-                                  percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
+                              const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                              if (jsonData.process_time && jsonData.total_remaining) {
+                                const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
+                                const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
+                                
+                                if (totalTime > 0 && totalRemaining >= 0) {
+                                  // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
+                                  percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
+                                }
+                              } else if (jsonData.process_info === "waiting" && localStorage.getItem('lastProgressPercent')) {
+                                // 대기 중일 때 마지막으로 계산된 진행률 사용
+                                percent = parseInt(localStorage.getItem('lastProgressPercent') || "0", 10);
                                 }
                               }
                             }
@@ -4205,7 +4205,7 @@ export default function TankSystem({
                             }
                             
                             const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                           
+                            
                             // 대기 상태인 경우 - 고정 값으로 표시
                             if (jsonData.process_info === "waiting") {
                               const pumpId = jsonData.pump_id || 0;
@@ -4320,6 +4320,50 @@ export default function TankSystem({
                                 );
                               }
                             }
+                            // 펌프 가동 상태일 때 총 공정 시간 진행률 표시 추가
+                            else if (jsonData.process_info === "operating" || jsonData.pump_id) {
+                              // process_time과 total_remaining이 있는 경우
+                              if (jsonData.process_time !== undefined && jsonData.total_remaining !== undefined) {
+                                const processTime = parseInt(String(jsonData.process_time).replace('s', ''), 10);
+                                const totalRemaining = parseInt(String(jsonData.total_remaining).replace('s', ''), 10);
+                                
+                                if (!isNaN(processTime) && !isNaN(totalRemaining) && processTime > 0) {
+                                  const elapsedTime = Math.max(0, processTime - totalRemaining);
+                                  const progressPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / processTime) * 100)));
+                                  
+                                  // 남은 시간을 시간, 분, 초 형식으로 변환
+                                  const formatTime = (seconds: number) => {
+                                    const hours = Math.floor(seconds / 3600);
+                                    const minutes = Math.floor((seconds % 3600) / 60);
+                                    const secs = seconds % 60;
+                                    
+                                    if (hours > 0) {
+                                      return `${hours}시간 ${minutes}분 ${secs}초`;
+                                    } else if (minutes > 0) {
+                                      return `${minutes}분 ${secs}초`;
+                                    } else {
+                                      return `${secs}초`;
+                                    }
+                                  };
+                                  
+                                  const formattedRemaining = formatTime(totalRemaining);
+                                  const formattedTotal = formatTime(processTime);
+                                
+                                return (
+                                  <div className="flex items-center space-x-2">
+                                      <span className="text-[10px] font-medium text-green-700 w-14">총진행률:</span>
+                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div 
+                                          className="h-full bg-green-500 rounded-full transition-all duration-1000 ease-in-out"
+                                          style={{ width: `${progressPercent}%` }}
+                                      ></div>
+                                    </div>
+                                      <span className="text-[9px] font-semibold text-green-700">{formattedRemaining}/{formattedTotal}</span>
+                                  </div>
+                                );
+                                }
+                              }
+                            }
                           }
                         } catch (e) {
                           console.error('Wait counter parsing error:', e);
@@ -4327,45 +4371,7 @@ export default function TankSystem({
                         return null;
                       })()}
                       
-                      {/* 3. 대기시간 진행률 바 추가 */}
-                      {(() => {
-                        try {
-                          // 최신 JSON 데이터에서 대기시간 정보 찾기
-                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                          if (latestJsonMsg && latestJsonMsg.rawJson) {
-                            // 텍스트 메시지인 경우 건너뛰기
-                            if (latestJsonMsg.rawJson.includes("현재 밸브 상태") || 
-                                !latestJsonMsg.rawJson.trim().startsWith('{')) {
-                              return null;
-                            }
-                            
-                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                            const totalTime = parseInt(String(jsonData.total_time), 10);
-                            const remainingTime = parseInt(String(jsonData.remaining_time), 10);
-                            
-                            if (!isNaN(remainingTime) && !isNaN(totalTime) && totalTime > 0) {
-                              const elapsedTime = totalTime - remainingTime;
-                              const waitPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / totalTime) * 100)));
-                              
-                              return (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-blue-700 w-14">대기카운터:</span>
-                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-in-out"
-                                      style={{ width: `${waitPercent}%` }}
-                                    ></div>
-                                  </div>
-                                  <span className="text-[9px] font-semibold text-blue-700">{remainingTime}초/{totalTime}초</span>
-                                </div>
-                              );
-                            }
-                          }
-                        } catch (e) {
-                          console.error('Wait counter parsing error:', e);
-                        }
-                        return null;
-                      })()}
+                      {/* 이 부분 제거 - 중복된 대기시간 진행률 바 */}
                     </div>
                   </div>
                 </div>

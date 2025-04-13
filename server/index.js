@@ -67,7 +67,8 @@ async function ensureDataDir() {
 app.post('/api/sequences', async (req, res) => {
   try {
     await ensureDataDir();
-    const sequences = req.body;
+    // req.body가 배열이거나 sequences 속성이 있는 객체인 경우 모두 처리
+    const sequences = Array.isArray(req.body) ? req.body : (req.body.sequences || []);
     await fs.writeFile(SEQUENCES_FILE, JSON.stringify(sequences, null, 2));
     res.status(200).json({ success: true, message: '시퀀스가 성공적으로 저장되었습니다.' });
   } catch (error) {

@@ -153,18 +153,24 @@ const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(sequences),
+      body: JSON.stringify({ sequences: sequences }),
     });
     
     if (response.ok) {
       console.log('시퀀스가 서버에 저장되었습니다.');
+      // 성공 시에도 로컬에 백업
+      saveSequencesToLocalStorage(sequences);
       return true;
     } else {
       console.error('시퀀스 저장 실패:', await response.text());
+      // 서버 저장 실패 시 로컬에 백업
+      saveSequencesToLocalStorage(sequences);
       return false;
     }
   } catch (error) {
     console.error('시퀀스 저장 중 오류:', error);
+    // 오류 발생 시 로컬에 백업
+    saveSequencesToLocalStorage(sequences);
     return false;
   }
 };
