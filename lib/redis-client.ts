@@ -20,6 +20,13 @@ const MAX_RETRY_ATTEMPTS = 3;
  */
 export async function getRedisClient(): Promise<RedisClientType> {
   try {
+    // 로컬 개발 환경에서 서버 연결 없이 동작하도록 강제 로컬 모드 사용 여부
+    const useLocalStorageOnly = process.env.USE_LOCAL_STORAGE === 'true';
+    if (useLocalStorageOnly) {
+      console.log('환경 설정에 따라 로컬 스토리지 모드 사용 (Redis 연결 시도 없음)');
+      return createLocalStorageClient();
+    }
+    
     // 이미 연결 시도 중이면 대기
     if (isConnecting) {
       console.log('Redis 연결 시도 중... 잠시 대기');
