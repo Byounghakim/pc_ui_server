@@ -81,15 +81,17 @@ export async function getRedisClient(): Promise<RedisClientType> {
       url: REDIS_URL,
       socket: {
         reconnectStrategy: (retries) => {
-          if (retries > 3) {
-            console.error('Redis 최대 재연결 시도 횟수 초과');
+          const MAX_RETRY_DELAY = 5000; // 최대 5초 딜레이
+          if (retries > 10) { // 재시도 횟수 증가
+            console.error(`Redis 최대 재연결 시도 횟수(${retries}) 초과`);
             return new Error('Redis 연결 실패');
           }
-          const delay = Math.min(retries * 100, 1000);
+          const delay = Math.min(retries * 200, MAX_RETRY_DELAY); // 딜레이 증가
           console.log(`Redis 재연결 ${retries}회 시도, ${delay}ms 후 재시도`);
           return delay;
         },
-        connectTimeout: 5000, // 연결 타임아웃: 5초
+        connectTimeout: 10000, // 연결 타임아웃 증가: 10초
+        keepAlive: 5000, // 연결 유지 설정 추가
       }
     });
     

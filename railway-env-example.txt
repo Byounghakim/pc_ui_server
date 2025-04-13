@@ -1,4 +1,7 @@
-# Redis 연결 정보
+# Railway 환경 변수 설정 예제
+# Railway 프로젝트 설정의 Variables 탭에 아래 내용을 복사하여 사용하세요
+
+# Redis 연결 정보 (Railway에서 자동으로 제공되는 경우 수정 필요)
 REDIS_URL=redis://default:evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm@interchange.proxy.rlwy.net:20220
 REDIS_PASSWORD=evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm
 REDISHOST=interchange.proxy.rlwy.net
@@ -8,13 +11,16 @@ REDISPORT=20220
 NEXT_PUBLIC_API_URL=https://extwork-production.up.railway.app/api
 API_KEY=test-api-key
 
-# Redis 연결 모드 (false: Redis 서버 사용, true: 로컬 스토리지 모드)
+# Redis 연결 모드 (Railway에서는 항상 false로 설정)
 USE_LOCAL_STORAGE=false
 
-# ESLint 비활성화 환경 변수
+# 포트 설정 (Railway에서 중요)
+PORT=3000
+
+# 빌드 설정
 DISABLE_ESLINT_PLUGIN=true
 NEXT_DISABLE_ESLINT=1
 ESLINT_NO_DEV_ERRORS=true
 NEXT_TELEMETRY_DISABLED=1
 CI=false
-SKIP_PREFLIGHT_CHECK=true
+SKIP_PREFLIGHT_CHECK=true 
