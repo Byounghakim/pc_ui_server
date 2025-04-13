@@ -4152,10 +4152,11 @@ export default function TankSystem({
                                 fill="none" 
                                 stroke={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'} 
                                 strokeWidth="3" 
-                                strokeDasharray={`${percent}, 100`} 
-                                strokeDashoffset="25" 
+                                strokeDasharray={`${15.9 * 2 * Math.PI}`} 
+                                strokeDashoffset={`${15.9 * 2 * Math.PI * (1 - percent/100)}`} 
                                 strokeLinecap="round" 
                                 className="transition-all duration-1000"
+                                transform="rotate(-90 18 18)"
                               />
                               
                               {/* 가운데 텍스트 */}
