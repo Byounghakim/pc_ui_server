@@ -1,5 +1,3 @@
 # extwork_server
-
-
-오류 제거 
-저징 구축 해야함 
+console 오류 수정 
+저장 아직

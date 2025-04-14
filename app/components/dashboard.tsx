@@ -574,50 +574,53 @@ export default function Dashboard() {
     
     console.log("MQTT 메시지 핸들러 설정 중...");
     
-    const handleMessage = (topic: string, message: Buffer) => {
-      const messageStr = message.toString();
-      console.log(`[MQTT 메시지 수신] 토픽: ${topic}, 메시지: ${messageStr}`);
-      
-      // 메인 탱크 수위 토픽 처리 - 최우선 처리
-      if (topic === 'extwork/tankMain/level') {
-        console.log(`[메인 탱크] 수위 메시지 수신: ${messageStr}`);
-        
-        // 시간 추가하여 표시 메시지 생성
-        const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-        const displayMessage = `${messageStr} (${timeStr})`;
-        
-        // 메인 탱크 메시지 저장 (본탱크 텍스트 박스용)
-        setTankData(prev => {
-          console.log('[메인 탱크] 메시지 업데이트:', displayMessage);
-          
-          const updatedData = {
-            ...prev,
-            mainTankMessage: displayMessage
-          };
-          
-          // 업데이트된 상태 로깅
-          console.log('[메인 탱크] 업데이트된 데이터:', JSON.stringify(updatedData));
-          
-          // 서버에 상태 저장
-          saveStateToServer(updatedData);
-          
-          return updatedData;
-        });
-        
-        // 진행 메시지에도 추가하여 로그에 남김
-        setProgressMessages(prev => {
-          const newMessage = {
-            timestamp: Date.now(),
-            message: `메인 탱크 수위 업데이트: ${messageStr}`,
-            rawJson: null
-          };
-          return [newMessage, ...prev].slice(0, 20);
-        });
-        
-        return;
-      }
-      
+    const handleMessage = async (topic: string, message: Buffer) => {
       try {
+        const messageStr = message.toString();
+        console.log(`[MQTT 메시지 수신] 토픽: ${topic}, 메시지: ${messageStr}`);
+        
+        // 메인 탱크 수위 토픽 처리 - 최우선 처리
+        if (topic === 'extwork/tankMain/level') {
+          console.log(`[메인 탱크] 수위 메시지 수신: ${messageStr}`);
+          
+          // 시간 추가하여 표시 메시지 생성
+          const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+          const displayMessage = `${messageStr} (${timeStr})`;
+          
+          // 상태 업데이트를 동기적으로 처리
+          setTankData(prev => {
+            const updatedData = {
+              ...prev,
+              mainTankMessage: displayMessage
+            };
+            
+            // 서버 상태 저장은 별도 처리
+            setTimeout(() => {
+              try {
+                saveStateToServer(updatedData).catch(err => 
+                  console.error('[메인 탱크] 상태 저장 오류:', err)
+                );
+              } catch (e) {
+                console.error('[메인 탱크] 상태 저장 처리 오류:', e);
+              }
+            }, 0);
+            
+            return updatedData;
+          });
+          
+          // 진행 메시지 업데이트도 동기적으로 처리
+          setProgressMessages(prev => {
+            const newMessage = {
+              timestamp: Date.now(),
+              message: `메인 탱크 수위 업데이트: ${messageStr}`,
+              rawJson: null
+            };
+            return [newMessage, ...prev].slice(0, 20);
+          });
+          
+          return;
+        }
+        
         // 토픽에 따른 처리
         if (topic.match(/extwork\/inverter(\d+)\/state/)) {
           const inverterId = Number.parseInt(topic.match(/extwork\/inverter(\d+)\/state/)![1]);
@@ -641,17 +644,25 @@ export default function Dashboard() {
                 return { ...tank, pumpStatus }
               }
               return tank
-            })
+            });
 
             // 업데이트된 상태
-            const updatedState = { ...prev, tanks: updatedTanks }
+            const updatedState = { ...prev, tanks: updatedTanks };
             
-            // 변경된 상태를 서버에 저장
-            saveStateToServer(updatedState)
+            // 상태 저장을 분리하여 비동기적으로 처리
+            setTimeout(() => {
+              try {
+                saveStateToServer(updatedState).catch(err => 
+                  console.error('[펌프 상태] 저장 오류:', err)
+                );
+              } catch (e) {
+                console.error('[펌프 상태] 저장 처리 오류:', e);
+              }
+            }, 0);
             
-            return updatedState
-          })
-          return
+            return updatedState;
+          });
+          return;
         }
 
         // 밸브 상태 토픽 처리 - extwork/valve/state
@@ -686,413 +697,51 @@ export default function Dashboard() {
             // JSON 형식인 경우 파싱하여 저장
             const jsonData = JSON.parse(messageStr);
             
-            // 작업 완료 메시지 감지 시
+            // 작업 완료 메시지 감지 시 - 비동기 작업 분리
             if (jsonData.status === 'completed' || messageStr.includes('completed')) {
               if (currentWorkLogId) {
-                workLogService.updateWorkLog(currentWorkLogId, {
-                  status: 'completed',
-                  endTime: new Date().toISOString(),
-                  errorDetails: '작업이 성공적으로 완료되었습니다.'
-                }).then(() => {
-                  loadWorkLogs();
-                  setCurrentWorkLogId(null);
-                });
+                // 비동기 작업은 setTimeout으로 분리
+                setTimeout(() => {
+                  try {
+                    workLogService.updateWorkLog(currentWorkLogId, {
+                      status: 'completed',
+                      endTime: new Date().toISOString(),
+                      errorDetails: '작업이 성공적으로 완료되었습니다.'
+                    }).then(() => {
+                      loadWorkLogs();
+                      setCurrentWorkLogId(null);
+                    }).catch(err => {
+                      console.error('작업 로그 업데이트 오류:', err);
+                    });
+                  } catch (e) {
+                    console.error('작업 완료 처리 오류:', e);
+                  }
+                }, 0);
               }
             }
-            
-            // 작업 중단 메시지 감지 시
-            if (jsonData.status === 'stopped' || messageStr.includes('stopped')) {
-              if (currentWorkLogId) {
-                workLogService.updateWorkLog(currentWorkLogId, {
-                  status: 'aborted',
-                  endTime: new Date().toISOString(),
-                  errorDetails: '작업이 중단되었습니다.'
-                }).then(() => {
-                  loadWorkLogs();
-                  setCurrentWorkLogId(null);
-                });
-              }
-            }
-            
-            // 오류 메시지 감지 시
-            if (jsonData.status === 'error' || messageStr.includes('error')) {
-              if (currentWorkLogId) {
-                workLogService.updateWorkLog(currentWorkLogId, {
-                  status: 'error',
-                  endTime: new Date().toISOString(),
-                  errorDetails: `오류 발생: ${jsonData.message || messageStr}`
-                }).then(() => {
-                  loadWorkLogs();
-                  setCurrentWorkLogId(null);
-                });
-              }
-            }
-            
-            const timestamp = Date.now();
-            let displayMessage = "";
-            
-            // JSON 데이터에서 메시지 추출
-            if (jsonData.message) {
-              displayMessage = jsonData.message;
-            } else if (jsonData.step) {
-              displayMessage = `단계 ${jsonData.step}: ${jsonData.description || '진행 중'}`;
-              
-              // 진행 정보 추출
-              let stepInfo = `S(${jsonData.current_step || 0}/${jsonData.total_steps || 0})`;
-              let elapsedTime = jsonData.elapsed_time ? formatTime(jsonData.elapsed_time) : "00:00";
-              let remainingTime = jsonData.remaining_time ? formatTime(jsonData.remaining_time) : "00:00";
-              let totalRemainingTime = jsonData.total_remaining_time ? formatTime(jsonData.total_remaining_time) : "00:00";
-              
-              // 진행 정보 업데이트
-              setProgressInfo({
-                step: stepInfo,
-                elapsedTime,
-                remainingTime,
-                totalRemainingTime
-              });
-              
-              // 탱크 데이터에도 진행 정보 추가
-              setTankData(prev => ({
-                ...prev,
-                progressInfo: {
-                  step: stepInfo,
-                  elapsedTime,
-                  remainingTime,
-                  totalRemainingTime
-                }
-              }));
-            } else {
-              displayMessage = `진행 상황 업데이트: ${messageStr}`;
-            }
-            
-            // 메시지 크기 제한 (10KB 이상인 경우)
-            let rawJson = messageStr;
-            if (rawJson && rawJson.length > 10000) {
-              console.warn(`메시지 크기가 너무 큽니다: ${rawJson.length} 바이트`);
-              rawJson = rawJson.substring(0, 10000) + "... (메시지 크기 초과로 잘림)"
-            }
-            
-            // 로그 추가 - 최신 메시지가 맨 앞에 오도록 변경
-            setProgressMessages(prev => {
-              const newMessage = {
-                timestamp,
-                message: displayMessage,
-                rawJson: rawJson
-              };
-              return [newMessage, ...prev].slice(0, 10); // 최신 10개 메시지만 유지
-            });
           } catch (error) {
             console.error('JSON 파싱 오류:', error);
-            
-            // JSON이 아닌 일반 텍스트 메시지 처리 - 메시지 크기 제한 추가
-            let displayMessage = messageStr;
-            if (displayMessage && displayMessage.length > 10000) {
-              console.warn(`메시지 크기가 너무 큽니다: ${displayMessage.length} 바이트. 잘라냅니다.`);
-              displayMessage = displayMessage.substring(0, 10000) + `... (메시지 크기 초과로 잘림)`;
-            }
-            
-            setProgressMessages(prev => {
-              const newMessage = {
-                timestamp: Date.now(),
-                message: displayMessage,
-                rawJson: null
-              };
-              return [newMessage, ...prev].slice(0, 10); // 최신 10개 메시지만 유지
-            });
-          }
-          
-          return;
-        }
-
-        // 에러 토픽 처리 (extwork/extraction/error)
-        if (topic === ERROR_TOPIC) {
-          console.log(`에러 메시지 수신: ${messageStr}`);
-          
-          // 에러 메시지 추가
-          setLastErrors(prev => {
-            const newErrors = [`${new Date().toLocaleTimeString()}: ${messageStr}`, ...prev].slice(0, 5);
-            return newErrors;
-          });
-          
-          // 작업 로그 오류 상태 업데이트
-          if (currentWorkLogId) {
-            workLogService.updateWorkLog(currentWorkLogId, {
-              status: 'error',
-              endTime: new Date().toISOString(),
-              errorDetails: `오류 발생: ${messageStr}`
-            }).then(() => {
-              loadWorkLogs();
-              setCurrentWorkLogId(null);
-            });
-          }
-          
-          return;
-        }
-
-        // 탱크 수위 토픽 처리 - extwork/inverter%d/tank%d_level 형식
-        const tankLevelMatch = topic.match(/extwork\/inverter(\d+)\/tank(\d+)_level/)
-        if (tankLevelMatch) {
-          const inverterId = Number.parseInt(tankLevelMatch[1])
-          const tankId = Number.parseInt(tankLevelMatch[2])
-          
-          console.log(`탱크 수위 메시지 수신 - 인버터: ${inverterId}, 탱크: ${tankId}, 메시지: ${messageStr}`)
-          
-          // 시간 추가하여 표시 메시지 생성
-          const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-          
-          // 세 가지 상태만 표시하도록 메시지 가공
-          let simplifiedMessage = messageStr;
-          
-          // "비어있음(5%미만)", "5% 이상 잔여", "가득채워짐" 세 가지 상태만 표시
-          if (messageStr.includes("5%미만") || messageStr.toLowerCase().includes("empty") || 
-              messageStr.includes("비어있") || messageStr.includes("비었")) {
-            simplifiedMessage = "비어있음(5%미만)";
-          } else if (messageStr.includes("가득") || messageStr.toLowerCase().includes("full") || 
-                     messageStr.includes("100%")) {
-            simplifiedMessage = "가득채워짐";
-          } else if (messageStr.includes("%")) {
-            // 수위 퍼센트 정보가 있으면 "5% 이상 잔여"로 표시
-            simplifiedMessage = "5% 이상 잔여";
-          }
-          
-          const displayMessage = `${simplifiedMessage} (${timeStr})`;
-      
-          // 중요: tank_level 메시지는 탱크 메시지로 저장 (펌프 태그 아님)
-          setTankData(prev => {
-            // 탱크 메시지 업데이트
-            return {
-              ...prev,
-              tankMessages: {
-                ...(prev.tankMessages || {}),
-                [tankId]: displayMessage
-              }
-            };
-          });
-          
-          return
-        }
-
-        // 메인 탱크 수위 토픽 처리 - extwork/tankMain/level 형식
-        if (topic === 'extwork/tankMain/level') {
-          console.log(`메인 탱크 수위 메시지 수신: ${messageStr}`)
-          
-          // 시간 추가하여 표시 메시지 생성
-          const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-          const displayMessage = `${messageStr} (${timeStr})`;
-          
-          // 메인 탱크 메시지 저장 (본탱크 텍스트 박스용)
-          setTankData(prev => {
-            console.log('메인 탱크 메시지 업데이트:', displayMessage);
-            // 디버깅을 위한 이전 상태 로깅 추가
-            console.log('이전 탱크 데이터:', JSON.stringify(prev));
-            
-            const updatedData = {
-              ...prev,
-              mainTankMessage: displayMessage
-            };
-            
-            // 업데이트된 상태 로깅
-            console.log('업데이트된 탱크 데이터:', JSON.stringify(updatedData));
-            return updatedData;
-          });
-          
-          // 진행 메시지에도 추가하여 로그에 남김
-          setProgressMessages(prev => {
-            const newMessage = {
-              timestamp: Date.now(),
-              message: `메인 탱크 수위 업데이트: ${messageStr}`,
-              rawJson: null
-            };
-            return [newMessage, ...prev].slice(0, 20);
-          });
-          
-          return;
-        }
-
-        // 펌프 전체 상태 토픽 처리
-        const overallStateMatch = topic.match(/extwork\/inverter(\d+)\/overallstate/)
-        if (overallStateMatch) {
-          const inverterId = Number.parseInt(overallStateMatch[1])
-          console.log(`인버터 ${inverterId}의 전체 상태 업데이트:`, messageStr)
-          
-          // 메인 탱크 상태 정보가 포함되어 있을 경우
-          if (messageStr.includes("main") || messageStr.includes("본탱크")) {
-            let status: "empty" | "filling" | "full" = "empty"
-            let level = 0
-            
-            if (messageStr.includes("full") || messageStr.includes("가득")) {
-              status = "full"
-              level = 100
-            } else if (messageStr.includes("filling") || messageStr.includes("채워")) {
-              status = "filling"
-              level = 50
-            }
-            
-            // 메인 탱크 상태를 업데이트 (이 부분은 유지하되, 명확한 메인 탱크 메시지일 때만 적용)
-            console.log("메인 탱크 상태 변경:", status, level);
-            
-            // 상태 메시지에 "본탱크" 또는 "main"이 직접적으로 포함된 경우에만 상태 변경
-            if (messageStr.includes("본탱크") || messageStr.includes("main")) {
-              setTankData(prev => ({
-                ...prev,
-                mainTank: {
-                  status,
-                  level
-                }
-              }))
-            }
-          }
-          
-          // 연결 타입 감지 (WiFi/BLE) - 모든 인버터(1~6번)를 위한 연결 타입 처리
-          if (inverterId >= 1 && inverterId <= 6) {
-            console.log(`${inverterId}번 펌프 연결 상태 확인:`, messageStr);
-            
-            setTankData(prev => {
-              if (!prev || !prev.tanks) return prev;
-              
-              const updatedTanks = [...prev.tanks];
-              if (updatedTanks[inverterId - 1]) {
-                const tank = updatedTanks[inverterId - 1];
-                
-                // BLE 연결 관련 메시지 확인
-                if (messageStr.includes("BLE만 연결됨") || 
-                    messageStr.includes("BLE 환경으로 전환됨") || 
-                    messageStr.includes("집단지성 네트워크")) {
-                  // BLE 연결 상태 설정
-                  updatedTanks[inverterId - 1] = {
-                    ...tank,
-                    connectionType: "BLE" as "BLE" | "WiFi"
-                  };
-                }
-                // WiFi/MQTT 연결 관련 메시지 확인
-                else if (messageStr.includes("MQTT만 연결됨") || 
-                         messageStr.includes("MQTT 환경으로 전환됨") || 
-                         messageStr.includes("MQTT 환경에서 동작 중") || 
-                         messageStr.includes("MQTT 재연결 완료")) {
-                  // WiFi 연결 상태 설정
-                  updatedTanks[inverterId - 1] = {
-                    ...tank,
-                    connectionType: "WiFi" as "BLE" | "WiFi"
-                  };
-                }
-              }
-              
-              return {
-                ...prev,
-                tanks: updatedTanks
-              };
-            });
-          }
-          
-          // overallstate 메시지는 펌프 태그에 표시
-          setPumpStateMessages(prev => {
-            // prev가 배열인지 확인하고 아니면 빈 배열로 초기화
-            const updatedMessages = Array.isArray(prev) ? [...prev] : [];
-            updatedMessages[inverterId] = {
-              id: inverterId,
-              timestamp: Date.now(),
-              message: messageStr
-            };
-            return updatedMessages;
-          });
-          
-          return
-        }
-
-        // 카메라 상태 토픽 처리
-        const camStateMatch = topic.match(/extwork\/cam(\d+)\/state/)
-        if (camStateMatch) {
-          const camNumber = parseInt(camStateMatch[1])
-          if (camNumber >= 1 && camNumber <= 5) {
-            // Flash ON/OFF 메시지 처리
-            let camStatus: "ON" | "OFF" = "OFF";
-            
-            // 메시지가 "Flash ON" 또는 "Flash OFF"인 경우 처리
-            if (messageStr.includes("Flash ON")) {
-              camStatus = "ON";
-              setLightStates(prev => {
-                const newStates = [...prev];
-                newStates[camNumber - 1] = "ON";
-                return newStates;
-              });
-            } else if (messageStr.includes("Flash OFF")) {
-              camStatus = "OFF";
-              setLightStates(prev => {
-                const newStates = [...prev];
-                newStates[camNumber - 1] = "OFF";
-                return newStates;
-              });
-            } else {
-              // 기존 카메라 상태 처리 로직 유지
-              camStatus = messageStr === "1" ? "ON" : "OFF";
-              setCamStates(prev => {
-                const newStates = [...prev];
-                newStates[camNumber - 1] = camStatus;
-                return newStates;
-              });
-            }
-            
-            // 상태 메시지 저장
-            setCamStateMessages(prev => ({
-              ...prev,
-              [camNumber]: messageStr
-            }));
-            return;
           }
         }
       } catch (error) {
-        console.error('MQTT 메시지 처리 오류:', error);
-      }
-      
-      // 추출 명령 응답 처리 (extwork/extraction/output)
-      if (topic === EXTRACTION_OUTPUT_TOPIC) {
-        console.log(`추출 명령 응답 수신: ${messageStr}`);
-        
-        try {
-          // 작업목록 상태 업데이트
-          if (messageStr.includes("JSON 명령이 성공적으로 처리되었습니다.")) {
-            // 추출 성공 시 해당 작업목록 진행중 상태로 변경
-            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
-            if (currentRunningSequence) {
-              setWorkInProgress(prev => ({
-                ...prev,
-                [currentRunningSequence]: true
-              }));
-            }
-          } else if (messageStr.includes("공정 종료")) {
-            // 공정 종료 시 작업목록 상태 초기화
-            const currentRunningSequence = localStorage.getItem('currentRunningSequence');
-            if (currentRunningSequence) {
-              setWorkInProgress(prev => ({
-                ...prev,
-                [currentRunningSequence]: false
-              }));
-              localStorage.removeItem('currentRunningSequence');
-            }
-          }
-          
-          // 메시지 표시
-          setProgressMessages(prev => [{
-            timestamp: Date.now(),
-            message: `추출 명령 응답: ${messageStr}`,
-            rawJson: null
-          }, ...prev]);
-        } catch (error) {
-          console.error('추출 명령 응답 처리 중 오류:', error);
-        }
-        
-        return;
+        // 전체 메시지 처리 오류 - 무시하고 계속 진행할 수 있도록 처리
+        console.error("MQTT 메시지 처리 중 오류:", error);
       }
     };
-
+    
     // 메시지 핸들러 등록
     mqttClient.on('message', handleMessage);
     
     // 컴포넌트 언마운트 시 이벤트 리스너 제거
     return () => {
-      mqttClient.off('message', handleMessage);
+      // 메시지 핸들러 제거 전 짧은 지연 추가
+      try {
+        mqttClient.off('message', handleMessage);
+      } catch (err) {
+        console.error("메시지 핸들러 제거 중 오류:", err);
+      }
     };
-  }, [mqttClient]);
+  }, [mqttClient, currentWorkLogId]);
 
   // 카메라 상태 변경 함수
   const toggleCamera = (camNumber: number) => {
