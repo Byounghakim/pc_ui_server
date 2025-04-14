@@ -1,7 +1,9 @@
 import { PumpSequence, WorkLog, AutomationProcess, LogRetentionPolicy } from '../types';
 
 // API 기본 URL - Next.js API 라우트 사용 (포트가 3000)
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 
+                    (typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? 
+                    window.location.origin + '/api' : '/api');
 
 // 서버 연결 상태를 저장하는 변수
 let isServerConnected = false; // 기본값을 false로 설정
@@ -33,6 +35,8 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 1500); // 1.5초 타임아웃으로 더 단축
+    
+    console.log(`서버 상태 확인 요청: ${API_BASE_URL}/health`);
     
     const response = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
@@ -67,7 +71,7 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
     
     // 상태 변경 또는 지정된 간격마다만 로그 출력
     if (prevStatus || showLog || now - lastServerErrorLogTime > ERROR_LOG_INTERVAL) {
-      console.log('서버 연결 실패: 로컬 저장소를 사용합니다.');
+      console.log(`서버 연결 실패 (${API_BASE_URL}/health): ${error.message}`);
       lastServerErrorLogTime = now;
     }
     
