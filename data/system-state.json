@@ -1,106 +1,96 @@
 {
-  "tankData": {
-    "mainTank": {
+  "valve": {
+    "state": "0000",
+    "description": {
+      "valveA": "닫힘",
+      "valveB": "닫힘"
+    }
+  },
+  "pumps": {
+    "pump1": "OFF",
+    "pump2": "OFF",
+    "pump3": "OFF",
+    "pump4": "OFF",
+    "pump5": "OFF",
+    "pump6": "OFF"
+  },
+  "tanks": [
+    {
+      "id": 1,
       "level": 0,
-      "status": "empty"
-    },
-    "tanks": [
-      {
-        "id": 1,
-        "level": 0,
-        "status": "empty",
-        "pumpStatus": "OFF",
-        "inverter": 1
-      },
-      {
-        "id": 2,
-        "level": 0,
-        "status": "empty",
-        "pumpStatus": "OFF",
-        "inverter": 2
-      },
-      {
-        "id": 3,
-        "level": 0,
-        "status": "empty",
-        "pumpStatus": "OFF",
-        "inverter": 3
-      },
-      {
-        "id": 4,
-        "level": 0,
-        "status": "empty",
-        "pumpStatus": "OFF",
-        "inverter": 4
-      },
-      {
-        "id": 5,
-        "level": 0,
-        "status": "empty",
-        "pumpStatus": "OFF",
-        "inverter": 5
-      },
-      {
-        "id": 6,
-        "level": 0,
-        "status": "empty",
-        "pumpStatus": "OFF",
-        "inverter": 6
-      }
-    ],
-    "valveState": "0000"
-  },
-  "pumpStateMessages": {
-    "2": "MQTT 재연결됨 (펌프: 꺼짐)",
-    "3": "MQTT 재연결됨 (펌프: 꺼짐)",
-    "4": "MQTT 재연결됨 (펌프: 꺼짐)",
-    "5": "MQTT 재연결됨 (펌프: 꺼짐)",
-    "6": "MQTT 재연결됨 (펌프: 꺼짐)"
-  },
-  "currentValveState": "",
-  "progressData": "데이터 없음",
-  "progressMessages": [
-    {
-      "timestamp": 1743972471977,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
+      "volume": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 1
     },
     {
-      "timestamp": 1743972353048,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
+      "id": 2,
+      "level": 0,
+      "volume": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 2,
+      "connectionType": "BLE"
     },
     {
-      "timestamp": 1743972331702,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
+      "id": 3,
+      "level": 0,
+      "volume": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 3,
+      "connectionType": "BLE"
     },
     {
-      "timestamp": 1743972315737,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
+      "id": 4,
+      "level": 0,
+      "volume": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 4,
+      "connectionType": "BLE"
     },
     {
-      "timestamp": 1743972277906,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
+      "id": 5,
+      "level": 0,
+      "volume": 0,
+      "status": "empty",
+      "pumpStatus": "OFF",
+      "inverter": 5,
+      "connectionType": "BLE"
     },
     {
-      "timestamp": 1743972240552,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
-    },
-    {
-      "timestamp": 1743972198432,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
-    },
-    {
-      "timestamp": 1743972056382,
-      "message": "추출 명령 응답: MQTT 연결 복구됨",
-      "rawJson": null
+      "id": 6,
+      "level": 0,
+      "volume": 0,
+      "status": "empty",
+      "pumpStatus": "ON",
+      "inverter": 6,
+      "connectionType": "BLE"
     }
   ],
-  "queueStatus": null,
-  "timestamp": "2025-04-06T20:49:42.799Z"
+  "tankSystem": {
+    "tanks": {
+      "tank1": {
+        "level": 0,
+        "volume": 0
+      },
+      "tank2": {
+        "level": 0,
+        "volume": 0
+      },
+      "tank3": {
+        "level": 0,
+        "volume": 0
+      }
+    }
+  },
+  "timestamp": 1744597533483,
+  "fromCache": true,
+  "progressInfo": {
+    "step": "",
+    "elapsedTime": "50s",
+    "remainingTime": "10s",
+    "totalRemainingTime": "00:00:00"
+  }
 }
