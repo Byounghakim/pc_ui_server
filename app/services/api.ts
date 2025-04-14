@@ -1,7 +1,7 @@
 import { PumpSequence, WorkLog, AutomationProcess, LogRetentionPolicy } from '../types';
 
-const PORT = process.env.PORT || 3000; // 3003 대신 3000 사용
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3003/api';
+// API 기본 URL - Next.js API 라우트 사용 (포트가 3000)
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // 서버 연결 상태를 저장하는 변수
 let isServerConnected = false; // 기본값을 false로 설정
