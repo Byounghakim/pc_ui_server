@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // 내부 백엔드 API URL
-const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://localhost:3003/api/health';
+const BACKEND_API_URL = process.env.BACKEND_API_URL || '/api/health';
 
 export async function GET(request: NextRequest) {
   // CORS 헤더 준비
