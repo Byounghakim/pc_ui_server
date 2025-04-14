@@ -26,11 +26,25 @@ const loadState = (key: string) => {
 
 // MQTT 서버 설정 - 환경 변수 사용
 const MQTT_CONFIG = {
-  server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development'
-    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884'
-    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884',
+  server: typeof window !== 'undefined' 
+    ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884'
+        : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884')
+    : (process.env.NODE_ENV === 'development'
+        ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884'
+        : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884'),
   username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
   password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || 'XihQ2Q%RaS9u#Z3g'
+};
+
+// MQTT 브로커 연결 옵션
+const MQTT_OPTIONS = {
+  clientId: `tank-system-client-${Date.now()}`,
+  clean: true,
+  reconnectPeriod: 5000, // 5초 간격으로 재연결 시도
+  connectTimeout: 30000, // 30초 연결 타임아웃
+  username: MQTT_CONFIG.username,
+  password: MQTT_CONFIG.password
 };
 
 // 문자열 상태 코드 → 숫자 코드 매핑 테이블
@@ -253,16 +267,15 @@ class MqttClient {
     }
 
     try {
-      // MQTT 연결 옵션
+      // MQTT 연결 옵션 (미리 정의된 옵션 사용)
       const options: mqtt.IClientOptions = {
+        ...MQTT_OPTIONS,
         clientId: `client_${Math.random().toString(16).substring(2, 10)}`,
         username: user,
-        password: pass,
-        keepalive: 60,
-        reconnectPeriod: 5000, // 5초
-        connectTimeout: 30 * 1000, // 30초
-        clean: true
+        password: pass
       };
+
+      console.log(`MQTT 연결 정보 - 서버: ${serverUrl}, 사용자: ${user}`);
 
       // MQTT 클라이언트 생성 및 연결
       this.client = mqtt.connect(serverUrl, options);

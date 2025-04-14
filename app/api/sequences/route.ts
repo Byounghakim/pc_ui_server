@@ -55,7 +55,7 @@ function saveSequencesToCache(data: any) {
 }
 
 // 내부 백엔드 API URL (동일 서버의 다른 포트)
-const BACKEND_API_URL = 'http://localhost:3003/api/sequences';
+const BACKEND_API_URL = process.env.BACKEND_API_URL?.replace('/health', '/sequences') || '/api/sequences';
 
 /**
  * 시퀀스 목록 조회 API
