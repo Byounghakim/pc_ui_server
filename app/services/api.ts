@@ -1,5 +1,6 @@
 import { PumpSequence, WorkLog, AutomationProcess, LogRetentionPolicy } from '../types';
 
+const PORT = process.env.PORT || 3000; // 3003 대신 3000 사용
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3003/api';
 
 // 서버 연결 상태를 저장하는 변수
