@@ -55,30 +55,63 @@ function saveSequencesToCache(data: any) {
 }
 
 // 내부 백엔드 API URL (동일 서버의 다른 포트)
-const BACKEND_API_URL = process.env.BACKEND_API_URL?.replace('/health', '/sequences') || '/api/sequences';
+const BACKEND_API_URL = '/api/sequences';
 
 /**
  * 시퀀스 목록 조회 API
  */
 export async function GET(request: NextRequest) {
   try {
-    // 백엔드 API로 요청 전달
-    const response = await fetch(BACKEND_API_URL, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      cache: 'no-store', // 캐싱 방지
-    });
-
-    // 응답 데이터
-    const data = await response.json();
+    console.log('[시퀀스 API] GET 요청 시작');
     
-    // NextResponse로 응답 반환
-    return NextResponse.json(data);
+    // 로컬 캐시 사용 또는 Redis 직접 조회
+    try {
+      // Redis 클라이언트 가져오기
+      const redis = await getRedisClient();
+      console.log('[시퀀스 API] Redis 클라이언트 가져옴, 연결 상태:', redis.isOpen ? '연결됨' : '연결 안됨');
+      
+      // 기존 데이터 가져오기
+      const existingData = await redis.get(PROCESS_KEY);
+      let processesData = { processes: [] };
+      
+      if (existingData) {
+        try {
+          processesData = JSON.parse(existingData);
+          console.log('[시퀀스 API] 기존 데이터 파싱 성공');
+        } catch (e) {
+          console.error('[시퀀스 API] 기존 데이터 파싱 오류:', e);
+          return NextResponse.json({
+            sequences: []
+          });
+        }
+      }
+      
+      // 모든 프로세스에서 시퀀스 추출
+      const allSequences = [];
+      if (processesData.processes && Array.isArray(processesData.processes)) {
+        for (const process of processesData.processes) {
+          if (process.sequences && Array.isArray(process.sequences)) {
+            allSequences.push(...process.sequences);
+          }
+        }
+      }
+      
+      // 캐시 업데이트
+      saveSequencesToCache({ sequences: allSequences });
+      
+      // 연결 종료
+      await redis.quit();
+      
+      return NextResponse.json({ sequences: allSequences });
+    } catch (redisError) {
+      console.error('[시퀀스 API] Redis 조회 오류, 캐시 사용:', redisError);
+      // Redis 연결 실패시 캐시 사용
+      const cachedData = getSequencesFromCache();
+      return NextResponse.json(cachedData);
+    }
   } catch (error) {
-    console.error('시퀀스 조회 중 오류:', error);
-    return NextResponse.json({ error: '시퀀스 조회 중 오류가 발생했습니다.' }, { status: 500 });
+    console.error('[시퀀스 API] 시퀀스 조회 중 오류:', error);
+    return NextResponse.json({ sequences: [] }, { status: 200 });
   }
 }
 
@@ -87,29 +120,91 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    console.log('[시퀀스 API] POST 요청 시작');
+    
     // 요청 본문 가져오기
     const body = await request.json();
+    console.log('[시퀀스 API] 요청 본문:', JSON.stringify(body).substring(0, 200) + '...');
     
-    // 백엔드 API로 요청 전달
-    const response = await fetch(BACKEND_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    });
+    // 시퀀스 배열 확인
+    if (!body.sequences || !Array.isArray(body.sequences)) {
+      console.error('[시퀀스 API] 유효하지 않은 시퀀스 데이터');
+      return NextResponse.json({ 
+        success: false, 
+        error: '유효하지 않은 시퀀스 데이터입니다.' 
+      }, { status: 400 });
+    }
 
-    // 응답 데이터
-    const data = await response.json();
-    
-    // 응답 상태 코드 가져오기
-    const status = response.status;
-    
-    // NextResponse로 응답 반환
-    return NextResponse.json(data, { status });
+    try {
+      // Redis 클라이언트 가져오기
+      const redis = await getRedisClient();
+      console.log('[시퀀스 API] Redis 클라이언트 가져옴, 연결 상태:', redis.isOpen ? '연결됨' : '연결 안됨');
+      
+      // 기존 데이터 가져오기
+      const existingData = await redis.get(PROCESS_KEY);
+      let processesData = { 
+        processes: [] 
+      };
+      
+      if (existingData) {
+        try {
+          processesData = JSON.parse(existingData);
+          console.log('[시퀀스 API] 기존 데이터 파싱 성공');
+        } catch (e) {
+          console.error('[시퀀스 API] 기존 데이터 파싱 오류:', e);
+          // 파싱 오류 시 새 데이터 구조 생성
+          processesData = { processes: [] };
+        }
+      }
+      
+      // 기본 프로세스 확인 (없으면 생성)
+      let defaultProcess = processesData.processes.find(p => p.name === DEFAULT_PROCESS_NAME);
+      
+      if (!defaultProcess) {
+        defaultProcess = {
+          ...DEFAULT_PROCESS,
+          id: uuidv4(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          sequences: []
+        };
+        processesData.processes.push(defaultProcess);
+        console.log('[시퀀스 API] 기본 프로세스 생성됨');
+      }
+      
+      // 시퀀스 업데이트
+      defaultProcess.sequences = body.sequences;
+      defaultProcess.updatedAt = new Date().toISOString();
+      
+      // Redis에 저장
+      await redis.set(PROCESS_KEY, JSON.stringify(processesData));
+      console.log('[시퀀스 API] 시퀀스 저장 완료');
+      
+      // 캐시 업데이트
+      saveSequencesToCache({ sequences: body.sequences });
+      
+      // 연결 종료
+      await redis.quit();
+      
+      return NextResponse.json({ 
+        success: true, 
+        message: '시퀀스가 저장되었습니다.' 
+      });
+    } catch (redisError) {
+      console.error('[시퀀스 API] Redis 저장 오류:', redisError);
+      // Redis 연결 실패 시 캐시에만 저장
+      saveSequencesToCache({ sequences: body.sequences });
+      return NextResponse.json({ 
+        success: true, 
+        message: '시퀀스가 캐시에 저장되었습니다. (Redis 사용 불가)' 
+      });
+    }
   } catch (error) {
-    console.error('시퀀스 저장 중 오류:', error);
-    return NextResponse.json({ error: '시퀀스 저장 중 오류가 발생했습니다.' }, { status: 500 });
+    console.error('[시퀀스 API] 시퀀스 저장 중 오류:', error);
+    return NextResponse.json({ 
+      success: false, 
+      error: '시퀀스 저장 중 오류가 발생했습니다.' 
+    }, { status: 500 });
   }
 }
 

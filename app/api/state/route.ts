@@ -174,9 +174,12 @@ export async function POST(req: NextRequest) {
   try {
     console.log('[DEBUG] POST 요청 처리 시작');
     let body;
+    let rawText = '';
+    
     try {
-      const rawText = await req.text();
-      console.log('[DEBUG] 원본 요청 본문:', rawText);
+      rawText = await req.text();
+      console.log('[DEBUG] 원본 요청 본문 길이:', rawText.length);
+      console.log('[DEBUG] 원본 요청 본문 샘플:', rawText.substring(0, 100) + (rawText.length > 100 ? '...' : ''));
       
       if (!rawText || rawText.trim() === '') {
         console.error('[DEBUG] 요청 본문이 비어 있습니다.');
@@ -185,13 +188,12 @@ export async function POST(req: NextRequest) {
       
       try {
         body = JSON.parse(rawText);
-        console.log('[DEBUG] 파싱된 요청 본문:', JSON.stringify(body));
+        console.log('[DEBUG] 파싱된 요청 본문 타입:', typeof body, Array.isArray(body) ? '(배열)' : body === null ? '(null)' : '(객체)');
       } catch (parseError) {
         console.error('[DEBUG] JSON 파싱 오류:', parseError);
-        return NextResponse.json({ 
-          error: '잘못된 JSON 형식', 
-          details: parseError instanceof Error ? parseError.message : String(parseError) 
-        }, { status: 400 });
+        // 잘못된 JSON 형식인 경우 텍스트 그대로 사용
+        body = { state: rawText };
+        console.log('[DEBUG] 파싱 오류로 원본 텍스트를 state로 설정');
       }
     } catch (reqError) {
       console.error('[DEBUG] 요청 처리 오류:', reqError);
@@ -201,8 +203,15 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
     
+    // body가 null이거나 undefined인 경우 처리
+    if (body === null || body === undefined) {
+      console.log('[DEBUG] 요청 본문이 null 또는 undefined, 빈 객체로 설정');
+      body = {};
+    }
+    
     // key와 state 속성 확인
     console.log('[DEBUG] key 속성 확인:', body.key);
+    console.log('[DEBUG] body 속성 타입:', Object.keys(body).join(', '));
     
     // key 속성이 없는 경우 body 자체를 state로 취급하고 기본 키 사용
     let key = body.key;
@@ -212,15 +221,39 @@ export async function POST(req: NextRequest) {
     if (!key) {
       console.log('[DEBUG] key 속성이 없어 기본값 사용: system:state');
       key = 'system:state';
-      state = body; // 전체 body를 state로 사용
+      
+      // state 속성이 없으면 body 자체를 state로 사용
+      if (!state) {
+        state = body;
+        console.log('[DEBUG] state 속성이 없어 body 자체를 state로 사용');
+      }
     }
 
-    if (!state) {
-      console.error('[DEBUG] state 데이터가 없습니다.');
-      return NextResponse.json({ error: '상태 데이터가 필요합니다.' }, { status: 400 });
+    // 최종 state 데이터 확인
+    if (!state || (typeof state === 'object' && Object.keys(state).length === 0)) {
+      // 빈 객체나 undefined/null인 경우 rawText 그대로 사용
+      if (rawText && rawText.trim() !== '') {
+        try {
+          state = JSON.parse(rawText);
+          console.log('[DEBUG] state가 비어있어 원본 요청 본문을 state로 설정');
+        } catch (e) {
+          console.log('[DEBUG] 원본 요청 본문 파싱 실패, 텍스트 그대로 사용');
+          state = { rawData: rawText };
+        }
+      } else {
+        console.error('[DEBUG] state 데이터가 유효하지 않습니다.');
+        return NextResponse.json({ 
+          error: '유효한 상태 데이터가 없습니다.', 
+          receivedData: rawText.substring(0, 100)
+        }, { status: 400 });
+      }
     }
 
-    console.log('[DEBUG] 처리할 상태 데이터:', JSON.stringify(state).substring(0, 200) + '...');
+    console.log('[DEBUG] 처리할 상태 데이터 타입:', typeof state);
+    console.log('[DEBUG] 처리할 상태 데이터 샘플:', 
+      typeof state === 'object' 
+        ? JSON.stringify(state).substring(0, 100) + '...' 
+        : state.toString().substring(0, 100) + '...');
 
     // 로컬 스토리지 모드인 경우
     if (isLocalStorageMode) {
