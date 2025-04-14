@@ -106,31 +106,59 @@ export const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<
     // 서버 연결 상태 확인
     const connected = await checkServerConnection();
     if (!connected) {
+      console.log('서버에 연결할 수 없어 시퀀스를 로컬에만 저장합니다.');
       return false;
     }
+    
+    console.log(`[시퀀스 저장] ${sequences.length}개 시퀀스 저장 시작...`);
     
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 타임아웃 (증가)
     
-    const response = await fetch(`${API_BASE_URL}/sequences`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ sequences: sequences }),
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      console.log(`서버 응답 오류: ${response.status}`);
-      return false;
+    try {
+      // 직접 배열을 보내는 형식으로 변경 (기존 { sequences: sequences } 형식에서 변경)
+      const response = await fetch(`${API_BASE_URL}/sequences`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(sequences),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // 응답 검사 및 로깅
+      console.log(`[시퀀스 저장] 서버 응답 상태: ${response.status} ${response.statusText}`);
+      
+      if (!response.ok) {
+        // 오류 응답 본문 로깅 (클론 응답 생성)
+        try {
+          const errorText = await response.text();
+          console.error(`[시퀀스 저장] 서버 응답 오류(${response.status}):`, errorText);
+        } catch (respError) {
+          console.error('[시퀀스 저장] 응답 본문 읽기 오류:', respError);
+        }
+        return false;
+      }
+      
+      // 성공 응답 처리
+      try {
+        const resultData = await response.json();
+        console.log('[시퀀스 저장] 저장 성공:', resultData);
+        return true;
+      } catch (parseError) {
+        // JSON 파싱 실패해도 성공으로 처리 (응답이 빈 텍스트일 수 있음)
+        console.log('[시퀀스 저장] 응답 파싱 실패했지만 요청은 성공한 것으로 처리');
+        return true;
+      }
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error('[시퀀스 저장] 네트워크 요청 실패:', fetchError);
+      throw fetchError;
     }
-    
-    return true;
   } catch (error) {
-    // 로그 출력하지 않음 - 이미 서버 연결 상태 체크에서 로그를 출력함
+    console.error('[시퀀스 저장] 오류 발생:', error);
     return false;
   }
 };

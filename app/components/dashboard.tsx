@@ -150,12 +150,14 @@ const loadStateFromServer = async () => {
 // 서버에 시퀀스 저장
 const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean> => {
   try {
+    console.log('시퀀스 저장 시작: 총 ' + sequences.length + '개');
+    
     const response = await fetch('/api/sequences', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ sequences: sequences }),
+      body: JSON.stringify(sequences), // 직접 배열을 전송
     });
     
     if (response.ok) {
@@ -164,7 +166,10 @@ const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean
       saveSequencesToLocalStorage(sequences);
       return true;
     } else {
-      console.error('시퀀스 저장 실패:', await response.text());
+      // 오류 내용 상세 로깅
+      const errorText = await response.text();
+      console.error(`시퀀스 저장 실패 (${response.status}):`, errorText);
+      
       // 서버 저장 실패 시 로컬에 백업
       saveSequencesToLocalStorage(sequences);
       return false;
