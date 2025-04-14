@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRedisClient } from '@/lib/redis-client';
+import localStateManager from '@/lib/local-state-manager';
 
 // 시스템 상태 인터페이스
 interface SystemState {
@@ -29,6 +30,9 @@ const STATE_KEY = 'system:state';
 let cachedState: any = null;
 let cacheTimestamp: number = 0;
 const CACHE_TTL_MS = 300000; // 5분 캐싱
+
+// 로컬 스토리지 모드 확인
+const isLocalStorageMode = process.env.USE_LOCAL_STORAGE === 'true';
 
 /**
  * 객체 깊은 병합 함수
@@ -90,8 +94,6 @@ function getDefaultState(): SystemState {
 
 /**
  * 시스템 상태 조회 API
- * 펌프 및 밸브 상태를 조회합니다.
- * 클라이언트가 처음 로드될 때 초기 상태를 빠르게 가져오기 위한 용도입니다.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -99,36 +101,63 @@ export async function GET(req: NextRequest) {
     const key = url.searchParams.get('key');
 
     if (!key) {
-      return NextResponse.json({ error: 'state key가 필요합니다.' }, { status: 400 });
+      return NextResponse.json({ error: '상태 키가 필요합니다.' }, { status: 400 });
     }
 
-    // Redis 클라이언트 가져오기
-    const redis = await getRedisClient();
-    if (!redis || !redis.isOpen) {
-      return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
-    }
+    // 로컬 스토리지 모드인 경우
+    if (isLocalStorageMode) {
+      console.log(`로컬 스토리지에서 상태 조회: ${key}`);
+      try {
+        const state = await localStateManager.getState(key);
+        
+        // 상태가 없으면 기본 상태 반환
+        if (state === null || state === undefined) {
+          const defaultState = getDefaultState();
+          await localStateManager.setState(key, defaultState);
+          return NextResponse.json({ state: defaultState });
+        }
+        
+        return NextResponse.json({ state });
+      } catch (error) {
+        console.error('로컬 스토리지 상태 조회 오류:', error);
+        return NextResponse.json({ 
+          error: `로컬 스토리지 상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
+        }, { status: 500 });
+      }
+    } 
+    // Redis 모드
+    else {
+      // Redis 클라이언트 가져오기
+      const redis = await getRedisClient();
+      if (!redis || !redis.isOpen) {
+        return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
+      }
 
-    const stateStr = await redis.get(key);
-    
-    if (!stateStr) {
-      return NextResponse.json({ state: null });
-    }
-    
-    // 'undefined' 문자열이거나 빈 문자열인 경우 처리
-    if (stateStr === 'undefined' || stateStr.trim() === '') {
-      console.warn(`유효하지 않은 상태 데이터 조회(${key}):`, stateStr);
-      return NextResponse.json({ state: null });
-    }
-    
-    try {
-      const state = JSON.parse(stateStr);
-      return NextResponse.json({ state });
-    } catch (parseError) {
-      console.error(`상태 데이터 파싱 오류(${key}):`, parseError, '원본 데이터:', stateStr);
-    return NextResponse.json({
-        error: '상태 데이터 파싱 오류', 
-        details: parseError instanceof Error ? parseError.message : String(parseError) 
-      }, { status: 500 });
+      try {
+        const stateStr = await redis.get(key);
+        
+        if (!stateStr || stateStr === 'undefined' || stateStr.trim() === '') {
+          const defaultState = getDefaultState();
+          await redis.set(key, JSON.stringify(defaultState));
+          return NextResponse.json({ state: defaultState });
+        }
+        
+        try {
+          const state = JSON.parse(stateStr);
+          return NextResponse.json({ state });
+        } catch (parseError) {
+          console.error(`상태 데이터 파싱 오류(${key}):`, parseError, '원본 데이터:', stateStr);
+          // 파싱 오류 시 기본 상태 반환
+          const defaultState = getDefaultState();
+          await redis.set(key, JSON.stringify(defaultState));
+          return NextResponse.json({ state: defaultState });
+        }
+      } catch (error) {
+        console.error('Redis 상태 조회 오류:', error);
+        return NextResponse.json({
+          error: `Redis 상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
+        }, { status: 500 });
+      }
     }
   } catch (error) {
     console.error('상태 조회 중 오류 발생:', error);
@@ -143,60 +172,129 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { key, state } = body;
+    console.log('[DEBUG] POST 요청 처리 시작');
+    let body;
+    try {
+      const rawText = await req.text();
+      console.log('[DEBUG] 원본 요청 본문:', rawText);
+      
+      if (!rawText || rawText.trim() === '') {
+        console.error('[DEBUG] 요청 본문이 비어 있습니다.');
+        return NextResponse.json({ error: '요청 본문이 비어 있습니다.' }, { status: 400 });
+      }
+      
+      try {
+        body = JSON.parse(rawText);
+        console.log('[DEBUG] 파싱된 요청 본문:', JSON.stringify(body));
+      } catch (parseError) {
+        console.error('[DEBUG] JSON 파싱 오류:', parseError);
+        return NextResponse.json({ 
+          error: '잘못된 JSON 형식', 
+          details: parseError instanceof Error ? parseError.message : String(parseError) 
+        }, { status: 400 });
+      }
+    } catch (reqError) {
+      console.error('[DEBUG] 요청 처리 오류:', reqError);
+      return NextResponse.json({ 
+        error: '요청 처리 오류', 
+        details: reqError instanceof Error ? reqError.message : String(reqError) 
+      }, { status: 400 });
+    }
+    
+    // key와 state 속성 확인
+    console.log('[DEBUG] key 속성 확인:', body.key);
+    
+    // key 속성이 없는 경우 body 자체를 state로 취급하고 기본 키 사용
+    let key = body.key;
+    let state = body.state;
 
+    // key 속성이 없는 경우 (클라이언트에서 직접 state 데이터만 전송하는 경우)
     if (!key) {
-      return NextResponse.json({ error: 'state key가 필요합니다.' }, { status: 400 });
+      console.log('[DEBUG] key 속성이 없어 기본값 사용: system:state');
+      key = 'system:state';
+      state = body; // 전체 body를 state로 사용
     }
 
     if (!state) {
-      return NextResponse.json({ error: 'state 데이터가 필요합니다.' }, { status: 400 });
+      console.error('[DEBUG] state 데이터가 없습니다.');
+      return NextResponse.json({ error: '상태 데이터가 필요합니다.' }, { status: 400 });
     }
 
-    // Redis 클라이언트 가져오기
-    const redis = await getRedisClient();
-    if (!redis || !redis.isOpen) {
-      return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
-    }
+    console.log('[DEBUG] 처리할 상태 데이터:', JSON.stringify(state).substring(0, 200) + '...');
 
-    // 기존 상태와 병합
-    try {
-      const existingStateStr = await redis.get(key);
-      let existingState = {};
+    // 로컬 스토리지 모드인 경우
+    if (isLocalStorageMode) {
+      console.log(`[DEBUG] 로컬 스토리지 모드로 상태 저장: ${key}`);
+      
+      try {
+        // 기존 상태 조회
+        const existingState = await localStateManager.getState(key) || {};
+        
+        // 새 상태와 깊은 병합
+        const mergedState = deepMerge(existingState, state);
+        
+        // 타임스탬프 추가
+        mergedState.timestamp = Date.now();
+        
+        // 로컬 스토리지에 저장
+        await localStateManager.setState(key, mergedState);
+        
+        console.log('[DEBUG] 상태가 로컬 스토리지에 저장되었습니다.');
+        return NextResponse.json({
+          success: true,
+          message: '상태가 로컬 스토리지에 저장되었습니다.' 
+        });
+      } catch (error) {
+        console.error('[DEBUG] 로컬 스토리지 저장 오류:', error);
+        return NextResponse.json({ 
+          error: `로컬 스토리지 상태 저장 오류: ${error instanceof Error ? error.message : String(error)}` 
+        }, { status: 500 });
+      }
+    } 
+    // Redis 모드
+    else {
+      // Redis 클라이언트 가져오기
+      const redis = await getRedisClient();
+      if (!redis || !redis.isOpen) {
+        return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
+      }
 
-      if (existingStateStr) {
-        // 'undefined' 문자열이거나 빈 문자열인 경우 처리
-        if (existingStateStr === 'undefined' || existingStateStr.trim() === '') {
-          console.warn(`유효하지 않은 상태 데이터(${key}):`, existingStateStr);
-        } else {
+      try {
+        // 기존 상태 조회
+        const existingStateStr = await redis.get(key);
+        let existingState = {};
+
+        if (existingStateStr && existingStateStr !== 'undefined' && existingStateStr.trim() !== '') {
           try {
             existingState = JSON.parse(existingStateStr);
             if (typeof existingState !== 'object' || existingState === null) {
-              console.warn(`파싱된 상태가 객체가 아님(${key}):`, existingState);
               existingState = {};
             }
           } catch (parseError) {
-            console.error(`기존 상태 파싱 오류(${key}):`, parseError, '원본 데이터:', existingStateStr);
+            console.error(`기존 상태 파싱 오류(${key}):`, parseError);
+            existingState = {};
           }
         }
-      }
 
-      // 새 상태와 깊은 병합
-      const mergedState = deepMerge(existingState, state);
+        // 새 상태와 깊은 병합
+        const mergedState = deepMerge(existingState, state);
+        
+        // 타임스탬프 추가
+        mergedState.timestamp = Date.now();
+        
+        // 상태 저장
+        await redis.set(key, JSON.stringify(mergedState));
       
-      // 상태 저장
-      await redis.set(key, JSON.stringify(mergedState));
-    
-    return NextResponse.json({
-      success: true,
-        message: 'State saved successfully' 
-      });
-    } catch (error) {
-      console.error('상태 저장 중 오류 발생:', error);
-      return NextResponse.json({ 
-        error: `상태 저장 중 오류: ${error instanceof Error ? error.message : String(error)}` 
-      }, { status: 500 });
+        return NextResponse.json({
+          success: true,
+          message: '상태가 Redis에 저장되었습니다.' 
+        });
+      } catch (error) {
+        console.error('Redis 상태 저장 오류:', error);
+        return NextResponse.json({ 
+          error: `Redis 상태 저장 오류: ${error instanceof Error ? error.message : String(error)}` 
+        }, { status: 500 });
+      }
     }
   } catch (error) {
     console.error('요청 처리 중 오류 발생:', error);

@@ -86,7 +86,9 @@ interface PumpSequenceType {
 // 서버에 상태 저장
 const saveStateToServer = async (state: any) => {
   try {
-    // 서버에 저장
+    // 서버에 저장 - stateKey 파라미터 추가
+    // api.ts에서 수정된 내용을 반영하여 key를 명시적으로 전달하지 않도록 함
+    // 기본값은 'system:state'로 api.ts에서 설정됨
     const serverSaved = await apiService.saveStateToServer(state);
     
     // 로컬 스토리지에도 백업으로 저장

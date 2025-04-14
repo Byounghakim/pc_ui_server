@@ -24,13 +24,13 @@ const loadState = (key: string) => {
   return null;
 };
 
-// MQTT 서버 설정
+// MQTT 서버 설정 - 환경 변수 사용
 const MQTT_CONFIG = {
-  server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development' 
-    ? 'ws://dev.codingpen.com:1884' 
-    : 'wss://api.codingpen.com:8884',
-  username: 'dnature',
-  password: 'XihQ2Q%RaS9u#Z3g'
+  server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development'
+    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884'
+    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884',
+  username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
+  password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || 'XihQ2Q%RaS9u#Z3g'
 };
 
 // 문자열 상태 코드 → 숫자 코드 매핑 테이블
