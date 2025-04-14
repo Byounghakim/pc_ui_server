@@ -150,32 +150,64 @@ const loadStateFromServer = async () => {
 // 서버에 시퀀스 저장
 const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean> => {
   try {
-    console.log('시퀀스 저장 시작: 총 ' + sequences.length + '개');
+    console.log('[저장] 시퀀스 저장 시작: 총 ' + sequences.length + '개');
     
+    // 시퀀스 정리 - 필수 속성만 포함한 깨끗한 객체 배열로 변환
+    const cleanedSequences = sequences.map(seq => {
+      // 필요한 기본 정보만 포함
+      const cleanSeq = {
+        operation_mode: seq.operation_mode,
+        repeats: seq.repeats,
+        process: seq.process ? [...seq.process] : [],
+        name: seq.name || '시퀀스'
+      };
+      
+      // wait_time이 있으면 추가
+      if (seq.wait_time) {
+        (cleanSeq as any).wait_time = seq.wait_time;
+      }
+      
+      return cleanSeq;
+    });
+    
+    console.log('[저장] 정리된 시퀀스 데이터:', cleanedSequences);
+    
+    // 시퀀스 배열 직접 전송
     const response = await fetch('/api/sequences', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(sequences), // 직접 배열을 전송
+      body: JSON.stringify(cleanedSequences),
+      // 타임아웃 10초로 증가
+      signal: AbortSignal.timeout(10000)
     });
     
+    // 응답 로깅
+    console.log('[저장] 서버 응답 상태:', response.status);
+    
     if (response.ok) {
-      console.log('시퀀스가 서버에 저장되었습니다.');
+      console.log('[저장] 시퀀스가 서버에 저장되었습니다.');
       // 성공 시에도 로컬에 백업
       saveSequencesToLocalStorage(sequences);
       return true;
     } else {
       // 오류 내용 상세 로깅
-      const errorText = await response.text();
-      console.error(`시퀀스 저장 실패 (${response.status}):`, errorText);
+      let errorText = '';
+      try {
+        const errorData = await response.json();
+        errorText = errorData.error || JSON.stringify(errorData);
+      } catch (e) {
+        errorText = await response.text();
+      }
+      console.error(`[저장] 시퀀스 저장 실패 (${response.status}):`, errorText);
       
       // 서버 저장 실패 시 로컬에 백업
       saveSequencesToLocalStorage(sequences);
       return false;
     }
   } catch (error) {
-    console.error('시퀀스 저장 중 오류:', error);
+    console.error('[저장] 시퀀스 저장 중 오류:', error);
     // 오류 발생 시 로컬에 백업
     saveSequencesToLocalStorage(sequences);
     return false;
@@ -3996,15 +4028,15 @@ export default function Dashboard() {
                       size="sm"
                 onClick={() => {
                         // 필요한 필드만 포함하여 새 시퀀스 배열 생성
-                        const cleanedSequences = sequences.map(seq => {
+    const cleanedSequences = sequences.map(seq => {
                           const cleanedSeq = {
-                            operation_mode: seq.operation_mode,
-                            repeats: seq.repeats,
+        operation_mode: seq.operation_mode,
+        repeats: seq.repeats,
                             process: seq.process
-                          };
-                          
+      };
+      
                           // wait_time이 있는 경우에만 추가
-                          if (seq.wait_time) {
+      if (seq.wait_time) {
                             (cleanedSeq as any).wait_time = seq.wait_time;
                           }
                           
@@ -4094,11 +4126,30 @@ export default function Dashboard() {
                         size="sm"
                         onClick={async () => {
                           try {
-                            const success = await saveSequencesToServer(savedSequences);
-                            if (success) {
+                            console.log('작업목록 저장 요청 시작 - 총 ' + savedSequences.length + '개');
+                            
+                            // 시퀀스 데이터 구조 확인 및 정리
+                            const cleanedSequences = savedSequences.map(seq => ({
+                              name: seq.name || '',
+                              operation_mode: seq.operation_mode,
+                              repeats: seq.repeats,
+                              process: seq.process,
+                              selectedPumps: seq.selectedPumps
+                            }));
+                            
+                            console.log('정리된 작업목록 데이터:', cleanedSequences);
+                            
+                            // 수정된 API 함수 사용
+                            const result = await saveSequencesToServer(cleanedSequences);
+                            
+                            if (result.success) {
+                              console.log('작업목록 저장 성공:', result.message);
+                              // 성공 시에도 로컬에 백업
+                              saveSequencesToLocalStorage(savedSequences);
                               alert(`성공: ${savedSequences.length}개 시퀀스가 서버에 저장되었습니다.`);
                             } else {
-                              alert('실패: 서버에 시퀀스를 저장하지 못했습니다.');
+                              console.error('작업목록 저장 실패:', result.message);
+                              alert(`실패: 서버에 시퀀스를 저장하지 못했습니다. ${result.message}`);
                             }
                           } catch (error) {
                             console.error('서버 저장 오류:', error);
@@ -4390,7 +4441,7 @@ export default function Dashboard() {
                                                   });
                                                   
                                                   console.log("발행된 JSON:", message);
-                                                } catch (error) {
+  } catch (error) {
                                                   console.error("MQTT 발행 오류:", error);
                                                   alert(`MQTT 발행 중 오류가 발생했습니다: ${error}`);
                                                 }

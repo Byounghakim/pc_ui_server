@@ -101,65 +101,54 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
 /**
  * 서버에 시퀀스 저장
  */
-export const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean> => {
+export const saveSequencesToServer = async (sequences: any[]): Promise<{ success: boolean; message: string }> => {
+  console.log(`[API] 서버에 ${sequences.length}개 시퀀스 저장 시도`);
+  
   try {
-    // 서버 연결 상태 확인
-    const connected = await checkServerConnection();
-    if (!connected) {
-      console.log('서버에 연결할 수 없어 시퀀스를 로컬에만 저장합니다.');
-      return false;
+    // 서버 연결 확인
+    const isServerConnected = await checkServerConnection();
+    if (!isServerConnected) {
+      console.warn('[API] 서버 연결 실패, 저장 프로세스 중단');
+      return { success: false, message: '서버 연결 실패' };
     }
-    
-    console.log(`[시퀀스 저장] ${sequences.length}개 시퀀스 저장 시작...`);
-    
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10초 타임아웃 (증가)
-    
-    try {
-      // 직접 배열을 보내는 형식으로 변경 (기존 { sequences: sequences } 형식에서 변경)
-      const response = await fetch(`${API_BASE_URL}/sequences`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(sequences),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      // 응답 검사 및 로깅
-      console.log(`[시퀀스 저장] 서버 응답 상태: ${response.status} ${response.statusText}`);
-      
-      if (!response.ok) {
-        // 오류 응답 본문 로깅 (클론 응답 생성)
-        try {
-          const errorText = await response.text();
-          console.error(`[시퀀스 저장] 서버 응답 오류(${response.status}):`, errorText);
-        } catch (respError) {
-          console.error('[시퀀스 저장] 응답 본문 읽기 오류:', respError);
-        }
-        return false;
-      }
-      
-      // 성공 응답 처리
-      try {
-        const resultData = await response.json();
-        console.log('[시퀀스 저장] 저장 성공:', resultData);
-        return true;
-      } catch (parseError) {
-        // JSON 파싱 실패해도 성공으로 처리 (응답이 빈 텍스트일 수 있음)
-        console.log('[시퀀스 저장] 응답 파싱 실패했지만 요청은 성공한 것으로 처리');
-        return true;
-      }
-    } catch (fetchError) {
-      clearTimeout(timeoutId);
-      console.error('[시퀀스 저장] 네트워크 요청 실패:', fetchError);
-      throw fetchError;
+
+    // 시퀀스 데이터 검증
+    if (!sequences || !Array.isArray(sequences) || sequences.length === 0) {
+      console.error('[API] 저장할 시퀀스 데이터가 유효하지 않음');
+      return { success: false, message: '저장할 시퀀스 데이터가 유효하지 않습니다' };
     }
+
+    // 시퀀스 데이터 전송 (배열로 직접 전송)
+    const response = await fetch(`${API_BASE_URL}/sequences`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(sequences),
+      // 타임아웃 연장 (큰 데이터셋 처리에 더 많은 시간 허용)
+      cache: 'no-store',
+      next: { revalidate: 0 }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`[API] 시퀀스 저장 실패 (상태: ${response.status}):`, errorData);
+      return { 
+        success: false, 
+        message: `서버 응답 오류 (${response.status}): ${errorData}`
+      };
+    }
+
+    const result = await response.json();
+    console.log(`[API] 시퀀스 저장 성공:`, result);
+    return { success: true, message: result.message || `${sequences.length}개 시퀀스 저장됨` };
+    
   } catch (error) {
-    console.error('[시퀀스 저장] 오류 발생:', error);
-    return false;
+    console.error('[API] 시퀀스 저장 중 예외 발생:', error);
+    return { 
+      success: false, 
+      message: error instanceof Error ? error.message : '알 수 없는 오류'
+    };
   }
 };
 
