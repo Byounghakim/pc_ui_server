@@ -57,12 +57,19 @@ function saveSequencesToCache(data: any) {
 // 내부 백엔드 API URL (동일 서버의 다른 포트)
 const BACKEND_API_URL = '/api/sequences';
 
+// CORS 헤더 정의
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+};
+
 /**
  * 시퀀스 목록 조회 API
  */
 export async function GET(request: NextRequest) {
   try {
-    console.log('[시퀀스 API] GET 요청 시작');
+    console.log('[API] GET /api/sequences 요청 시작');
     
     // 로컬 캐시 사용 또는 Redis 직접 조회
     try {
@@ -102,16 +109,16 @@ export async function GET(request: NextRequest) {
       // 연결 종료
       await redis.quit();
       
-      return NextResponse.json({ sequences: allSequences });
+      return NextResponse.json({ sequences: allSequences }, { headers: corsHeaders });
     } catch (redisError) {
-      console.error('[시퀀스 API] Redis 조회 오류, 캐시 사용:', redisError);
+      console.error('[API] Redis 조회 오류, 캐시 사용:', redisError);
       // Redis 연결 실패시 캐시 사용
       const cachedData = getSequencesFromCache();
-      return NextResponse.json(cachedData);
+      return NextResponse.json(cachedData, { headers: corsHeaders });
     }
   } catch (error) {
-    console.error('[시퀀스 API] 시퀀스 조회 중 오류:', error);
-    return NextResponse.json({ sequences: [] }, { status: 200 });
+    console.error('[API] 시퀀스 조회 중 오류:', error);
+    return NextResponse.json({ sequences: [] }, { status: 200, headers: corsHeaders });
   }
 }
 
@@ -204,14 +211,14 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `${sequences.length}개 시퀀스 저장 완료`,
       count: sequences.length
-    }, { status: 200 });
+    }, { status: 200, headers: corsHeaders });
     
   } catch (error) {
     console.error(`[API] 시퀀스 저장 오류:`, error);
     return NextResponse.json({ 
       error: '시퀀스 저장 중 오류가 발생했습니다',
       message: error instanceof Error ? error.message : '알 수 없는 오류'
-    }, { status: 500 });
+    }, { status: 500, headers: corsHeaders });
   }
 }
 
@@ -368,7 +375,7 @@ export async function DELETE(req: NextRequest) {
         message: `ID가 ${sequenceId}인 시퀀스가 삭제되었습니다.`,
         deletedSequence,
         remainingCount: allSequences.length
-      });
+      }, { headers: corsHeaders });
     } catch (redisError) {
       console.error('[시퀀스 API] Redis 처리 중 오류:', redisError);
       
@@ -392,10 +399,6 @@ export async function DELETE(req: NextRequest) {
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-    }
+    headers: corsHeaders
   });
 } 

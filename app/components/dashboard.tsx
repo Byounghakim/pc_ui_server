@@ -4126,7 +4126,7 @@ export default function Dashboard() {
                         size="sm"
                         onClick={async () => {
                           try {
-                            console.log('작업목록 저장 요청 시작 - 총 ' + savedSequences.length + '개');
+                            console.log('[저장] 작업목록 저장 요청 시작 - 총 ' + savedSequences.length + '개');
                             
                             // 시퀀스 데이터 구조 확인 및 정리
                             const cleanedSequences = savedSequences.map(seq => ({
@@ -4137,22 +4137,33 @@ export default function Dashboard() {
                               selectedPumps: seq.selectedPumps
                             }));
                             
-                            console.log('정리된 작업목록 데이터:', cleanedSequences);
+                            console.log('[저장] 정리된 작업목록 데이터:', cleanedSequences);
                             
-                            // 수정된 API 함수 사용
-                            const result = await saveSequencesToServer(cleanedSequences);
+                            // 직접 API 호출로 변경 (saveSequencesToServer 함수에 문제가 있는 것으로 판단)
+                            const response = await fetch('/api/sequences', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify(cleanedSequences)
+                            });
                             
-                            if (result.success) {
-                              console.log('작업목록 저장 성공:', result.message);
-                              // 성공 시에도 로컬에 백업
+                            console.log('[저장] 응답 상태:', response.status, response.statusText);
+                            
+                            if (response.ok) {
+                              const responseData = await response.json();
+                              console.log('[저장] 응답 데이터:', responseData);
+                              
+                              // 성공 시 로컬에도 백업
                               saveSequencesToLocalStorage(savedSequences);
                               alert(`성공: ${savedSequences.length}개 시퀀스가 서버에 저장되었습니다.`);
                             } else {
-                              console.error('작업목록 저장 실패:', result.message);
-                              alert(`실패: 서버에 시퀀스를 저장하지 못했습니다. ${result.message}`);
+                              const errorText = await response.text();
+                              console.error('[저장] 작업목록 저장 실패:', response.status, errorText);
+                              alert(`실패: 서버에 시퀀스를 저장하지 못했습니다. (HTTP ${response.status})`);
                             }
                           } catch (error) {
-                            console.error('서버 저장 오류:', error);
+                            console.error('[저장] 서버 저장 오류:', error);
                             alert(`오류: 서버 저장 중 문제가 발생했습니다. ${error}`);
                           }
                         }}
