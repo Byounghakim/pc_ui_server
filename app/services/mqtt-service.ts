@@ -1,20 +1,23 @@
-import mqttClient from '../../lib/mqtt-client';
-import { MQTT_TOPICS } from '../../lib/mqtt-topics';
+import { MQTT_TOPICS, MQTT_SERVER_CONFIG } from '../../lib/mqtt-topics';
 import dbTaskService from './db-task-service';
 import { broadcastMessage } from '../api/sync/route';
 import { v4 as uuidv4 } from 'uuid';
 import { WorkTask, WorkLog } from '../types';
 import { connectToDatabase, COLLECTIONS } from '../lib/local-db-connect';
 import localStateManager from '../../lib/local-state-manager';
+import MqttClient from '../../lib/mqtt-client';
 
 // MQTT 서버 설정
 const MQTT_CONFIG = {
   server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development' 
-    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884' 
-    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884',
+    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || MQTT_SERVER_CONFIG.DEV 
+    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || MQTT_SERVER_CONFIG.PROD,
   username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
   password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || 'XihQ2Q%RaS9u#Z3g'
 };
+
+// MqttClient 인스턴스 생성
+const mqttClient = new MqttClient();
 
 // 작업 실행 상태 인터페이스
 interface TaskExecutionStatus {

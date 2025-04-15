@@ -624,6 +624,18 @@ export default function TankSystem({
           console.log(`추출 입력 명령 수신: ${messageStr}`);
           
           try {
+            // 메시지 유효성 검사 추가
+            if (!messageStr || messageStr.trim() === '') {
+              throw new Error("빈 메시지 입니다");
+            }
+            
+            // 'next'와 같은 유효하지 않은 JSON 문자열 필터링
+            if (messageStr.trim() === 'next' || !messageStr.trim().startsWith('{')) {
+              console.log('JSON 형식이 아닌 메시지 수신:', messageStr);
+              addNotification(`JSON 형식이 아닌 메시지: ${messageStr}`, 'warning');
+              return;
+            }
+            
             // JSON 데이터 파싱 시도
             const jsonData = JSON.parse(messageStr);
             
@@ -658,7 +670,7 @@ export default function TankSystem({
             
             console.log(`추출 명령 처리됨: ${displayMessage}`);
           } catch (parseError) {
-            console.error('추출 입력 명령 파싱 오류:', parseError);
+            console.error('추출 입력 명령 파싱 오류:', parseError, '원본 메시지:', messageStr);
             
             // 파싱 실패해도 알림은 띄워줌
             addNotification('추출 명령을 수신했지만 처리할 수 없습니다. 형식을 확인해주세요.', 'error');
@@ -667,7 +679,7 @@ export default function TankSystem({
             if (setProgressMessages) {
               setProgressMessages(prev => [{
                 timestamp: Date.now(),
-                message: `오류: 수신된 명령의 JSON 형식이 잘못되었습니다.`,
+                message: `오류: 수신된 명령의 JSON 형식이 잘못되었습니다. [${messageStr.substring(0, 20)}${messageStr.length > 20 ? '...' : ''}]`,
                 rawJson: null
               }, ...prev]);
             }
@@ -4007,101 +4019,77 @@ export default function TankSystem({
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-2">
             <div className="bg-blue-50 py-1 px-2 text-xs font-semibold text-blue-700 rounded-t-lg border-b border-gray-200 flex justify-between items-center">
               <span>공정 진행 계획 요약</span>
-              {extractionCommand?.active && (
+              {progressMessages.filter(msg => msg.rawJson).length > 0 && (
                 <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[9px] font-bold animate-pulse">
                   활성
                 </span>
               )}
             </div>
             <div className="p-2 text-xs">
-              {/* 추출 명령이 있고 활성 상태인 경우 표시 */}
-              {extractionCommand?.active && extractionCommand.rawJson ? (
-                <div className="space-y-2">
-                  {(() => {
-                    try {
-                      const jsonData = JSON.parse(extractionCommand.rawJson);
-                      
-                      // 복합 명령어 처리 (sequences 배열이 있는 경우)
-                      if (jsonData?.sequences && Array.isArray(jsonData.sequences)) {
-                        return (
-                          <div className="bg-gray-50 p-2 rounded border border-gray-100">
-                            <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">복합 공정 계획</div>
-                            
-                            {jsonData.sequences.map((seq: any, seqIdx: number) => (
-                              <div key={`seq-${seqIdx}`} className="mb-2 p-1.5 bg-white rounded border border-gray-100">
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="font-semibold text-blue-700">시퀀스 {seqIdx + 1}:</span>
-                                  <span className="text-[9px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">
-                                    {seq.operation_mode ? `모드: ${seq.operation_mode}` : ''}
-                                  </span>
-                                </div>
+              {/* 공정 계획 정보 표시 */}
+              <div className="space-y-2">
+                {/* 공정 계획 정보 표시 */}
+                {progressMessages.filter(msg => msg.rawJson && msg.rawJson.trim().startsWith('{')).slice(0, 1).map((msg, idx) => {
+                  try {
+                    // 유효성 검사 추가
+                    if (!msg.rawJson || msg.rawJson.trim() === '') {
+                      throw new Error("JSON 데이터가 없습니다");
+                    }
+                    
+                    // 'next' 또는 유효하지 않은 형식의 문자열 필터링
+                    if (msg.rawJson.trim() === 'next' || !msg.rawJson.trim().startsWith('{')) {
+                      throw new Error(`유효하지 않은 JSON 형식: ${msg.rawJson.substring(0, 20)}`);
+                    }
+                    
+                    // JSON 파싱 시도
+                    const jsonData = msg.rawJson ? JSON.parse(msg.rawJson) : null;
+                    
+                    // 복합 명령어 처리 (sequences 배열이 있는 경우)
+                    if (jsonData?.sequences && Array.isArray(jsonData.sequences)) {
+                      return (
+                        <div key={`process-plan-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
+                          <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">복합 공정 계획</div>
+                          
+                          {jsonData.sequences.map((seq, seqIdx) => (
+                            <div key={`seq-${seqIdx}`} className="mb-2 p-1.5 bg-white rounded border border-gray-100">
+                              <div className="flex justify-between items-center mb-1">
+                                <span className="font-semibold text-blue-700">시퀀스 {seqIdx + 1}:</span>
+                                <span className="text-[9px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">
+                                  {seq.operation_mode ? `모드: ${seq.operation_mode}` : ''}
+                                </span>
+                              </div>
                               
+                              {/* 추가 정보 표시 */}
+                              <div className="grid grid-cols-2 gap-1 text-[9px]">
                                 {seq.repeats !== undefined && (
-                                  <div className="mb-1 flex justify-between items-center">
-                                    <span className="font-semibold text-blue-700">반복 횟수:</span>
-                                    <span className="bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{seq.repeats}회</span>
+                                  <div>
+                                    <span className="font-semibold text-blue-700">반복:</span>{" "}
+                                    <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{seq.repeats}회</span>
                                   </div>
                                 )}
-                              
-                                {seq.process && Array.isArray(seq.process) && (
-                                  <div className="mb-1">
-                                    <span className="font-semibold text-blue-700">프로세스:</span>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {seq.process.map((proc: any, procIdx: number) => (
-                                        <span key={procIdx} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
-                                          {proc}
-                                        </span>
-                                      ))}
-                                    </div>
+                                
+                                {seq.wait_time !== undefined && (
+                                  <div>
+                                    <span className="font-semibold text-blue-700">대기:</span>{" "}
+                                    <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{seq.wait_time}초</span>
                                   </div>
                                 )}
                               </div>
-                            ))}
-                          </div>
-                        );
-                      }
-                      
-                      // 일반 명령어 처리
-                      return (
-                        <div className="bg-gray-50 p-2 rounded border border-gray-100">
-                          {jsonData?.name && (
-                            <div className="mb-1 flex justify-between items-center">
-                              <span className="font-semibold text-blue-700">공정 이름:</span>{" "}
-                              <span className="bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{jsonData.name}</span>
                             </div>
-                          )}
-                          {jsonData?.mode && (
-                            <div className="mb-1 flex justify-between items-center">
-                              <span className="font-semibold text-blue-700">운영 모드:</span>{" "}
-                              <span className={`px-2 py-0.5 rounded border ${
-                                jsonData.mode === "sequential" ? "bg-purple-50 border-purple-100 text-purple-700" : 
-                                jsonData.mode === "concurrent" ? "bg-green-50 border-green-100 text-green-700" : 
-                                jsonData.mode === "mixed" ? "bg-yellow-50 border-yellow-100 text-yellow-700" : 
-                                "bg-gray-50 border-gray-100"
-                              }`}>
-                                {jsonData.mode === "sequential" ? "순차 모드" : 
-                                    jsonData.mode === "concurrent" ? "동시 모드" : 
-                                jsonData.mode === "mixed" ? "혼합 모드" : jsonData.mode}
-                              </span>
-                            </div>
-                          )}
-                          {jsonData?.repeat !== undefined && (
-                            <div className="mb-1 flex justify-between items-center">
-                              <span className="font-semibold text-blue-700">반복 횟수:</span>{" "}
-                              <span className="bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{jsonData.repeat}회</span>
-                            </div>
-                          )}
-                          {jsonData?.sequences && (
-                            <div className="mb-1">
-                              <span className="font-semibold text-blue-700">활성화될 펌프:</span>{" "}
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {jsonData.sequences.map((seq: any, i: number) => {
-                                  const pumpId = seq.pump_id || seq.pumpId;
+                          ))}
+                          
+                          {/* 선택된 펌프 표시 */}
+                          {jsonData.selectedPumps && Array.isArray(jsonData.selectedPumps) && (
+                            <div className="mt-2">
+                              <div className="font-semibold text-blue-700 mb-1">선택된 펌프:</div>
+                              <div className="flex flex-wrap gap-1">
+                                {jsonData.selectedPumps.map((selected, i) => {
+                                  const pumpId = selected ? (i + 1) : null;
                                   if (!pumpId) return null;
                                   return (
                                     <span key={i} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
                                       {pumpId}
-                            </span>
+                                    </span>
                                   );
                                 }).filter(Boolean)}
                               </div>
@@ -4111,27 +4099,52 @@ export default function TankSystem({
                             <div className="mb-1 flex justify-between items-center">
                               <span className="font-semibold text-blue-700">예상 종료:</span>{" "}
                               <span className="bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-indigo-700">{jsonData.estimated_completion_time}</span>
-                          </div>
+                            </div>
                           )}
                         </div>
                       );
-                    } catch (error) {
-                      console.error('JSON 파싱 오류:', error, extractionCommand.rawJson);
-                      return (
-                        <div className="text-red-500 bg-red-50 p-2 rounded border border-red-200">
-                          공정 명령 처리 중 오류가 발생했습니다.
-                        </div>
-                      );
                     }
-                  })()}
-                </div>
-              ) : (
-                // 추출 명령이 없거나 비활성 상태인 경우 "준비중" 표시
-                <div className="text-gray-500 bg-gray-50 border border-gray-200 italic text-center p-3 rounded">
-                  <div className="text-[11px]">준비중</div>
-                  <div className="text-[9px] mt-1">extwork/extraction/input 토픽으로 JSON 명령을 보내주세요</div>
-                </div>
-              )}
+                    
+                    // 단일 명령어 처리 (기존 방식 유지)
+                    return (
+                      <div key={`process-plan-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
+                        <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">단일 공정 계획</div>
+                        <div className="grid grid-cols-2 gap-1 text-[9px]">
+                          {jsonData.name && (
+                            <div className="col-span-2">
+                              <span className="font-semibold text-blue-700">이름:</span>{" "}
+                              <span className="font-medium">{jsonData.name}</span>
+                            </div>
+                          )}
+                          {jsonData.repeats !== undefined && (
+                            <div>
+                              <span className="font-semibold text-blue-700">반복:</span>{" "}
+                              <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{jsonData.repeats}회</span>
+                            </div>
+                          )}
+                          {jsonData.operation_mode !== undefined && (
+                            <div>
+                              <span className="font-semibold text-blue-700">모드:</span>{" "}
+                              <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{jsonData.operation_mode}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  } catch (error) {
+                    console.error('JSON 파싱 오류:', error, msg.rawJson);
+                    return (
+                      <div className="text-red-500 bg-red-50 p-2 rounded border border-red-200">
+                        공정 명령 처리 중 오류가 발생했습니다.
+                        <div className="text-[9px] mt-1">오류: {error.message}</div>
+                        <div className="text-[8px] mt-1 text-gray-500 truncate">
+                          {msg.rawJson ? `원본: ${msg.rawJson.substring(0, 30)}${msg.rawJson.length > 30 ? '...' : ''}` : '데이터 없음'}
+                        </div>
+                      </div>
+                    );
+                  }
+                })}
+              </div>
             </div>
           </div>
           
@@ -4143,7 +4156,7 @@ export default function TankSystem({
             <div className="p-3">
               {/* JSON 데이터 - 하나만 표시 */}
               <div className="space-y-2">
-                {progressMessages.filter(msg => msg.rawJson).slice(0, 1).map((msg, idx) => (
+                {progressMessages.filter(msg => msg.rawJson && typeof msg.rawJson === 'string' && msg.rawJson.trim().startsWith('{')).slice(0, 1).map((msg, idx) => (
                   <div key={`json-${idx}`} className="p-2 rounded bg-white border border-gray-100 text-[10px] leading-tight">
                       <div className="flex justify-between items-center">
                       <span className="font-medium text-green-700">JSON 데이터</span>
@@ -4155,6 +4168,24 @@ export default function TankSystem({
                         <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[9px]">
                           {(() => {
                             try {
+                              // 유효성 검사 추가
+                              if (!msg.rawJson || msg.rawJson.trim() === '') {
+                                return (
+                                  <div className="col-span-2 text-amber-600">
+                                    비어있는 데이터
+                                  </div>
+                                );
+                              }
+                              
+                              // 'next'와 같은 유효하지 않은 문자열 검사
+                              if (msg.rawJson.trim() === 'next' || !msg.rawJson.trim().startsWith('{')) {
+                                return (
+                                  <div className="col-span-2 text-amber-600">
+                                    형식이 올바르지 않은 데이터: {msg.rawJson}
+                                  </div>
+                                );
+                              }
+                              
                               // 텍스트 메시지인 경우 처리
                               if (msg.rawJson.includes("현재 밸브 상태") || 
                                   !msg.rawJson.trim().startsWith('{')) {
@@ -4202,9 +4233,13 @@ export default function TankSystem({
                                 </>
                               );
                             } catch (error) {
+                              console.error("JSON 파싱 오류:", error, "데이터:", msg.rawJson?.substring(0, 50));
                               return (
                                 <div className="col-span-2 text-red-500">
-                                  JSON 파싱 오류: 잘못된 형식
+                                  JSON 파싱 오류: {error.message}
+                                  <div className="mt-1 text-gray-500 text-[8px] truncate">
+                                    {msg.rawJson ? `${msg.rawJson.substring(0, 40)}${msg.rawJson.length > 40 ? '...' : ''}` : '데이터 없음'}
+                                  </div>
                                 </div>
                               );
                             }
@@ -4214,6 +4249,11 @@ export default function TankSystem({
                       )}
                             </div>
                 ))}
+                {progressMessages.filter(msg => msg.rawJson).length === 0 && (
+                  <div className="text-gray-500 text-[10px] italic p-2 text-center">
+                    데이터가 없습니다
+                  </div>
+                )}
                             </div>
                             </div>
           </div>

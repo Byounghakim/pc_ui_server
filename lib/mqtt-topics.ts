@@ -322,33 +322,53 @@ export function getDefaultTankSystemData(totalTanks: number = 6): TankSystemData
 
 // ========== MQTT_TOPICS 객체 내보내기 ==========
 
-// 모든 토픽을 포함하는 단일 객체로 내보내기
+// MQTT 기본 설정
+export const MQTT_SERVER_CONFIG = {
+  PROD: 'wss://api.codingpen.com:8884',
+  DEV: 'ws://localhost:8083',
+  DEV_REMOTE: 'ws://dev.codingpen.com:1884'
+};
+
+// MQTT 토픽 상수 정의
 export const MQTT_TOPICS = {
-  PUMP_COMMAND_TOPIC,
-  PUMP_STATE_TOPIC,
-  TANK_LEVEL_TOPIC,
-  PUMP_OVERALL_STATE_TOPIC,
-  EXTRACTION_INPUT_TOPIC,
-  EXTRACTION_OUTPUT_TOPIC,
-  PROCESS_PROGRESS_TOPIC,
-  AUTOMATION_CONTROL_TOPIC,
-  AUTOMATION_STATUS_TOPIC,
-  ERROR_TOPIC,
-  VALVE_INPUT_TOPIC,
-  VALVE_STATE_TOPIC,
-  QUEUE_STATUS_TOPIC,
+  // 장치 상태 관련 토픽
+  DEVICE_STATUS: 'extwork/device/status',
+  ERROR_TOPIC: 'extwork/device/error',
   
-  // 추가 토픽들
-  DEVICE_STATUS: "extwork/device/status",
-  DEVICE_COMMAND: "extwork/device/command",
+  // 탱크 시스템 토픽
+  VALVE_STATE_TOPIC: 'extwork/valve/state',
+  MAIN_TANK_LEVEL_TOPIC: 'extwork/tankMain/level',
+  
+  // 펌프 관련 토픽
+  getPumpStateTopic: (pumpId: number) => `extwork/inverter${pumpId}/state`,
+  getPumpCommandTopic: (pumpId: number) => `extwork/inverter${pumpId}/command`,
+  getPumpKCommandTopic: (pumpId: number) => `extwork/inverter${pumpId}/k_command`,
+  getPumpResetTopic: (pumpId: number) => `extwork/inverter${pumpId}/reset`,
+  getPumpTankLevelTopic: (inverterId: number, tankId: number) => `extwork/inverter${inverterId}/tank${tankId}_level`,
+  
+  // 진행 상황 토픽
+  PROCESS_PROGRESS: 'extwork/process/progress',
+  
+  // 추출 관련 토픽
+  EXTRACTION_INPUT: 'extwork/extraction/input',
+  EXTRACTION_PROGRESS: 'extwork/extraction/progress',
+  EXTRACTION_COMPLETE: 'extwork/extraction/complete',
+  
+  // 알림 관련 토픽
+  NOTIFICATION_TOPIC: 'tank-system/notifications',
+  
+  // 자동화 관련 토픽
+  AUTOMATION_STATUS: 'extwork/automation/status',
+  AUTOMATION_COMMAND: 'extwork/automation/command',
+  
+  // 연결 상태 토픽
+  CONNECTION_STATE: 'extwork/connection/state',
   
   // 유틸리티 함수들
-  getPumpCommandTopic,
-  getPumpStateTopic,
-  getTankLevelTopic,
-  getPumpOverallStateTopic,
   parseTankLevelMessage,
   parseValveStateMessage,
   parsePumpStateMessage,
   getAllSubscriptionTopics
-}; 
+};
+
+export default MQTT_TOPICS; 
