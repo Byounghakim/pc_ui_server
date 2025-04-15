@@ -158,7 +158,8 @@ export const saveStateToServer = async (state: any): Promise<boolean> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
     
-    const response = await fetch(`${API_BASE_URL}/state`, {
+    // 요청 형식 변경: key 쿼리 파라미터를 추가
+    const response = await fetch(`${API_BASE_URL}/state?key=system:state`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -195,7 +196,8 @@ export const loadStateFromServer = async (): Promise<any | null> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
     
-    const response = await fetch(`${API_BASE_URL}/state`, {
+    // key 쿼리 파라미터 추가
+    const response = await fetch(`${API_BASE_URL}/state?key=system:state`, {
       signal: controller.signal
     });
     
