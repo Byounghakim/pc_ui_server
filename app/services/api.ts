@@ -1,19 +1,7 @@
 import { PumpSequence, WorkLog, AutomationProcess, LogRetentionPolicy } from '../types';
 
-// API 기본 URL - Next.js API 라우트 사용
-let API_BASE_URL = '/api'; // 기본값으로 상대 경로 사용
-
-// 브라우저 환경에서만 실행
-if (typeof window !== 'undefined') {
-  // Railway 또는 실제 배포 환경에서는 현재 호스트를 기준으로 API URL 설정
-  if (window.location.hostname !== 'localhost') {
-    API_BASE_URL = `/api`; // 배포 환경에서는 상대 경로 사용
-  } else {
-    // 로컬 개발 환경에서는 full URL 사용 가능
-    API_BASE_URL = `${window.location.origin}/api`;
-  }
-  console.log('API URL 설정됨:', API_BASE_URL);
-}
+// API 기본 URL - Next.js API 라우트 사용 (포트가 3000)
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // 서버 연결 상태를 저장하는 변수
 let isServerConnected = false; // 기본값을 false로 설정
@@ -30,11 +18,6 @@ const MAX_CHECK_COUNT = 3; // 최대 연속 시도 횟수
  * @param showLog 로그를 표시할지 여부
  */
 export const checkServerConnection = async (forceCheck = false, showLog = false): Promise<boolean> => {
-  // API URL 로깅(디버깅용)
-  if (showLog) {
-    console.log(`현재 API URL: ${API_BASE_URL}`);
-  }
-  
   // 마지막 체크 후 일정 시간이 지났거나 강제 체크인 경우에만 확인
   const now = Date.now();
   if (!forceCheck && now - lastServerCheckTime < SERVER_CHECK_INTERVAL) {
@@ -44,21 +27,15 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
   // 연속 시도 횟수가 MAX_CHECK_COUNT를 초과하고 마지막 체크 후 30분이 지나지 않았으면
   // 이전 결과 반환 (너무 자주 시도하지 않도록)
   if (connectionCheckCount >= MAX_CHECK_COUNT && now - lastServerCheckTime < 1800000) {
-    if (showLog) {
-      console.log(`최대 재시도 횟수(${MAX_CHECK_COUNT}) 초과로 이전 상태 반환: ${isServerConnected ? '연결됨' : '연결 안됨'}`);
-    }
     return isServerConnected;
   }
   
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // 3초 타임아웃으로 늘림
-    
-    console.log(`서버 상태 확인 요청: ${API_BASE_URL}/health (시도 ${connectionCheckCount + 1}/${MAX_CHECK_COUNT})`);
+    const timeoutId = setTimeout(() => controller.abort(), 1500); // 1.5초 타임아웃으로 더 단축
     
     const response = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
-      cache: 'no-store', // 캐시 사용 안함
       signal: controller.signal
     });
     
@@ -77,8 +54,8 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
         console.log('서버 연결 해제됨: 로컬 데이터만 사용합니다.');
         connectionCheckCount++; // 연결 실패 시 카운터 증가
       }
-    } else if (showLog) {
-      console.log(`서버 연결 상태: ${isServerConnected ? '정상' : '연결 안됨'}`);
+    } else if (showLog && isServerConnected) {
+      console.log('서버 연결 상태 확인됨');
     }
     
     return isServerConnected;
@@ -90,7 +67,7 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
     
     // 상태 변경 또는 지정된 간격마다만 로그 출력
     if (prevStatus || showLog || now - lastServerErrorLogTime > ERROR_LOG_INTERVAL) {
-      console.log(`서버 연결 실패 (${API_BASE_URL}/health): ${error instanceof Error ? error.message : String(error)}`);
+      console.log('서버 연결 실패: 로컬 저장소를 사용합니다.');
       lastServerErrorLogTime = now;
     }
     
@@ -101,54 +78,37 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
 /**
  * 서버에 시퀀스 저장
  */
-export const saveSequencesToServer = async (sequences: any[]): Promise<{ success: boolean; message: string }> => {
-  console.log(`[API] 서버에 ${sequences.length}개 시퀀스 저장 시도`);
-  
+export const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<boolean> => {
   try {
-    // 서버 연결 확인
-    const isServerConnected = await checkServerConnection();
-    if (!isServerConnected) {
-      console.warn('[API] 서버 연결 실패, 저장 프로세스 중단');
-      return { success: false, message: '서버 연결 실패' };
+    // 서버 연결 상태 확인
+    const connected = await checkServerConnection();
+    if (!connected) {
+      return false;
     }
-
-    // 시퀀스 데이터 검증
-    if (!sequences || !Array.isArray(sequences) || sequences.length === 0) {
-      console.error('[API] 저장할 시퀀스 데이터가 유효하지 않음');
-      return { success: false, message: '저장할 시퀀스 데이터가 유효하지 않습니다' };
-    }
-
-    // 시퀀스 데이터 전송 (배열로 직접 전송)
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
+    
     const response = await fetch(`${API_BASE_URL}/sequences`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(sequences),
-      // 타임아웃 연장 (큰 데이터셋 처리에 더 많은 시간 허용)
-      cache: 'no-store',
-      next: { revalidate: 0 }
+      body: JSON.stringify({ sequences: sequences }),
+      signal: controller.signal
     });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error(`[API] 시퀀스 저장 실패 (상태: ${response.status}):`, errorData);
-      return { 
-        success: false, 
-        message: `서버 응답 오류 (${response.status}): ${errorData}`
-      };
-    }
-
-    const result = await response.json();
-    console.log(`[API] 시퀀스 저장 성공:`, result);
-    return { success: true, message: result.message || `${sequences.length}개 시퀀스 저장됨` };
     
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      console.log(`서버 응답 오류: ${response.status}`);
+      return false;
+    }
+    
+    return true;
   } catch (error) {
-    console.error('[API] 시퀀스 저장 중 예외 발생:', error);
-    return { 
-      success: false, 
-      message: error instanceof Error ? error.message : '알 수 없는 오류'
-    };
+    // 로그 출력하지 않음 - 이미 서버 연결 상태 체크에서 로그를 출력함
+    return false;
   }
 };
 
@@ -188,10 +148,6 @@ export const loadSequencesFromServer = async (): Promise<PumpSequence[] | null> 
  */
 export const saveStateToServer = async (state: any): Promise<boolean> => {
   try {
-    // 디버깅 로그 추가
-    console.log('[DEBUG API] saveStateToServer 함수 호출됨');
-    console.log('[DEBUG API] 전달받은 state 객체:', state);
-    
     // 서버 연결 상태 확인
     const connected = await checkServerConnection();
     if (!connected) {
@@ -202,58 +158,23 @@ export const saveStateToServer = async (state: any): Promise<boolean> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
     
-    // API 요청 형식 변경: {key, state} 형식으로 수정
-    const requestData = {
-      key: 'system:state', // 기본 시스템 상태 키
-      state: state // 실제 상태 데이터
-    };
+    const response = await fetch(`${API_BASE_URL}/state`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(state),
+      signal: controller.signal
+    });
     
-    // 디버깅 로그 추가
-    console.log('[DEBUG API] 요청 데이터:', JSON.stringify(requestData));
-    console.log('[DEBUG API] 요청 URL:', `${API_BASE_URL}/state`);
+    clearTimeout(timeoutId);
     
-    try {
-      const response = await fetch(`${API_BASE_URL}/state`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestData),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      // 응답 확인 로그 추가 - 응답을 JSON으로 파싱하지 않고 상태 코드만 확인
-      console.log('[DEBUG API] 응답 상태:', response.status, response.statusText);
-      
-      if (!response.ok) {
-        console.log(`서버 응답 오류: ${response.status}`);
-        
-        // 오류 응답 본문 로깅 (클론 응답 생성)
-        try {
-          const errorText = await response.text();
-          console.log('[DEBUG API] 오류 응답 본문:', errorText);
-        } catch (respError) {
-          console.log('[DEBUG API] 응답 본문 읽기 오류:', respError);
-        }
-        
-        return false;
-      }
-      
-      // 성공 응답 로깅
-      try {
-        const successText = await response.text();
-        console.log('[DEBUG API] 성공 응답 본문:', successText);
-      } catch (respError) {
-        console.log('[DEBUG API] 응답 본문 읽기 오류:', respError);
-      }
-      
-      return true;
-    } catch (fetchError) {
-      console.log('[DEBUG API] fetch 오류:', fetchError);
-      throw fetchError;
+    if (!response.ok) {
+      console.log(`서버 응답 오류: ${response.status}`);
+      return false;
     }
+    
+    return true;
   } catch (error) {
     console.log('서버에 상태 저장 중 오류:', error);
     return false;
@@ -263,7 +184,7 @@ export const saveStateToServer = async (state: any): Promise<boolean> => {
 /**
  * 서버에서 상태 불러오기
  */
-export const loadStateFromServer = async (key: string = 'system:state'): Promise<any | null> => {
+export const loadStateFromServer = async (): Promise<any | null> => {
   try {
     // 서버 연결 상태 확인 - 로그 표시 안 함
     const connected = await checkServerConnection();
@@ -274,8 +195,7 @@ export const loadStateFromServer = async (key: string = 'system:state'): Promise
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
     
-    // key 파라미터 추가
-    const response = await fetch(`${API_BASE_URL}/state?key=${encodeURIComponent(key)}`, {
+    const response = await fetch(`${API_BASE_URL}/state`, {
       signal: controller.signal
     });
     
@@ -286,7 +206,7 @@ export const loadStateFromServer = async (key: string = 'system:state'): Promise
     }
     
     const data = await response.json();
-    return data.state; // 응답에서 state 필드 추출
+    return data;
   } catch (error) {
     return null;
   }

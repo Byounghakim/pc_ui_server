@@ -7,13 +7,13 @@ import { WorkTask, WorkLog } from '../types';
 import { connectToDatabase, COLLECTIONS } from '../lib/local-db-connect';
 import localStateManager from '../../lib/local-state-manager';
 
-// MQTT 서버 설정 - 환경 변수 사용
+// MQTT 서버 설정
 const MQTT_CONFIG = {
   server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development' 
-    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884' 
-    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884',
-  username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
-  password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || 'XihQ2Q%RaS9u#Z3g'
+    ? 'ws://dev.codingpen.com:1884' 
+    : 'wss://api.codingpen.com:8884',
+  username: 'dnature',
+  password: 'XihQ2Q%RaS9u#Z3g'
 };
 
 // 작업 실행 상태 인터페이스

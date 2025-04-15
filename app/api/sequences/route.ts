@@ -1,404 +1,243 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRedisClient } from '@/lib/redis-client';
-import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+import { createClient } from 'redis';
+import { env, shouldUseLocalStorage, logger, LogLevel, createLogGroup } from '../../config/environment';
 
-// Redis에 저장할 키 이름 - 자동화 공정과 동일한 키를 사용하고 processes 배열 내에 저장
-const PROCESS_KEY = 'automation:processes';
-const DEFAULT_PROCESS_NAME = '기본 작업목록 프로세스';
+// Redis 클라이언트 설정
+const redisClient = shouldUseLocalStorage ? null : createClient({
+  url: env.redisUrl || `redis://${env.redisHost}:${env.redisPort}`,
+  password: env.redisPassword,
+});
 
-// 기본 자동화 공정 데이터
-const DEFAULT_PROCESS = {
-  id: '',
-  name: DEFAULT_PROCESS_NAME,
-  sequences: [],
-  createdAt: '',
-  updatedAt: ''
-};
-
-// 브라우저에서 로컬 스토리지 대신 메모리 캐시 사용 (서버에서 실행 시)
-const memoryCache = {
-  data: null as string | null,
-};
-
-// API 응답 로깅 함수
-function logResponse(method: string, success: boolean, message: string) {
-  const timestamp = new Date().toISOString();
-  const status = success ? '성공' : '실패';
-  console.log(`[${timestamp}] [${method}] [${status}] ${message}`);
-}
-
-/**
- * 로컬 캐시에서 시퀀스 가져오기
- */
-function getSequencesFromCache() {
-  try {
-    if (memoryCache.data) {
-      return JSON.parse(memoryCache.data);
-    }
-  } catch (e) {
-    console.error('캐시 데이터 파싱 오류:', e);
+// Redis 연결 준비
+async function connectRedis() {
+  if (shouldUseLocalStorage) {
+    logger.info('로컬 스토리지 모드 사용 중: Redis 연결 생략됨');
+    return null;
   }
-  return { sequences: [] };
+
+  try {
+    if (!redisClient?.isOpen) {
+      await redisClient?.connect();
+      logger.info('Redis 연결 성공');
+    }
+    return redisClient;
+  } catch (error) {
+    logger.error('Redis 연결 실패:', error);
+    return null;
+  }
 }
 
-/**
- * 로컬 캐시에 시퀀스 저장
- */
-function saveSequencesToCache(data: any) {
+// 로컬 스토리지 관련 함수
+const LOCAL_STORAGE_PATH = env.localStoragePath || 'local-redis-state.json';
+
+// 로컬 스토리지에서 데이터 불러오기
+function getLocalRedisData() {
+  const logGroup = createLogGroup('getLocalRedisData');
+  
   try {
-    memoryCache.data = JSON.stringify(data);
+    if (!fs.existsSync(LOCAL_STORAGE_PATH)) {
+      logger.debug(`로컬 스토리지 파일 없음: ${LOCAL_STORAGE_PATH}`);
+      return {};
+    }
+    
+    const data = fs.readFileSync(LOCAL_STORAGE_PATH, 'utf8');
+    const parsedData = JSON.parse(data);
+    logger.debug(`로컬 스토리지에서 데이터 로드 성공: ${Object.keys(parsedData).length} 항목`);
+    logGroup.end();
+    return parsedData;
+  } catch (error) {
+    logger.error('로컬 스토리지에서 데이터 로드 실패:', error);
+    logGroup.end();
+    return {};
+  }
+}
+
+// 로컬 스토리지에 데이터 저장하기
+function saveLocalRedisData(data: any) {
+  const logGroup = createLogGroup('saveLocalRedisData');
+  
+  try {
+    const currentData = getLocalRedisData();
+    const newData = { ...currentData, ...data };
+    
+    // 디렉토리 생성 (없는 경우)
+    const directory = path.dirname(LOCAL_STORAGE_PATH);
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    
+    fs.writeFileSync(LOCAL_STORAGE_PATH, JSON.stringify(newData, null, 2), 'utf8');
+    logger.debug(`로컬 스토리지에 데이터 저장 성공: ${Object.keys(data).length} 항목`);
+    logGroup.end();
     return true;
-  } catch (e) {
-    console.error('캐시 데이터 저장 오류:', e);
+  } catch (error) {
+    logger.error('로컬 스토리지에 데이터 저장 실패:', error);
+    logGroup.end();
     return false;
   }
 }
 
-// 내부 백엔드 API URL (동일 서버의 다른 포트)
-const BACKEND_API_URL = '/api/sequences';
-
-// CORS 헤더 정의
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-};
-
-/**
- * 시퀀스 목록 조회 API
- */
+// GET 요청 처리
 export async function GET(request: NextRequest) {
-  try {
-    console.log('[API] GET /api/sequences 요청 시작');
-    
-    // 로컬 캐시 사용 또는 Redis 직접 조회
-    try {
-      // Redis 클라이언트 가져오기
-      const redis = await getRedisClient();
-      console.log('[시퀀스 API] Redis 클라이언트 가져옴, 연결 상태:', redis.isOpen ? '연결됨' : '연결 안됨');
-      
-      // 기존 데이터 가져오기
-      const existingData = await redis.get(PROCESS_KEY);
-      let processesData = { processes: [] };
-      
-      if (existingData) {
-        try {
-          processesData = JSON.parse(existingData);
-          console.log('[시퀀스 API] 기존 데이터 파싱 성공');
-        } catch (e) {
-          console.error('[시퀀스 API] 기존 데이터 파싱 오류:', e);
-          return NextResponse.json({
-            sequences: []
-          });
-        }
-      }
-      
-      // 모든 프로세스에서 시퀀스 추출
-      const allSequences = [];
-      if (processesData.processes && Array.isArray(processesData.processes)) {
-        for (const process of processesData.processes) {
-          if (process.sequences && Array.isArray(process.sequences)) {
-            allSequences.push(...process.sequences);
-          }
-        }
-      }
-      
-      // 캐시 업데이트
-      saveSequencesToCache({ sequences: allSequences });
-      
-      // 연결 종료
-      await redis.quit();
-      
-      return NextResponse.json({ sequences: allSequences }, { headers: corsHeaders });
-    } catch (redisError) {
-      console.error('[API] Redis 조회 오류, 캐시 사용:', redisError);
-      // Redis 연결 실패시 캐시 사용
-      const cachedData = getSequencesFromCache();
-      return NextResponse.json(cachedData, { headers: corsHeaders });
-    }
-  } catch (error) {
-    console.error('[API] 시퀀스 조회 중 오류:', error);
-    return NextResponse.json({ sequences: [] }, { status: 200, headers: corsHeaders });
-  }
-}
-
-/**
- * 시퀀스 저장 API - 자동화 공정 내부에 저장
- */
-export async function POST(request: NextRequest) {
-  console.log(`[API] POST /api/sequences 요청 수신`);
+  const logGroup = createLogGroup('GET /api/sequences');
   
   try {
-    let sequences: any[] = [];
-    const contentType = request.headers.get('content-type') || '';
+    // Redis 연결
+    const client = await connectRedis();
     
-    // 요청 본문 처리
-    if (contentType.includes('application/json')) {
-      const body = await request.json();
-      console.log(`[API] 요청 본문 구조:`, JSON.stringify(body).substring(0, 200) + '...');
+    if (client) {
+      // Redis에서 시퀀스 데이터 불러오기
+      const sequences = await client.get('sequences');
+      if (sequences) {
+        logGroup.log(LogLevel.INFO, '시퀀스 데이터 Redis에서 로드 성공');
+        logGroup.end();
+        return NextResponse.json(JSON.parse(sequences));
+      }
+    }
+    
+    // Redis에 연결할 수 없거나 데이터가 없는 경우 로컬 스토리지 사용
+    if (shouldUseLocalStorage) {
+      const localData = getLocalRedisData();
+      const sequences = localData.sequences || [];
       
-      // 배열인 경우 (직접 시퀀스 배열이 전송된 경우)
-      if (Array.isArray(body)) {
-        sequences = body;
-        console.log(`[API] 배열 형식 감지: ${sequences.length}개 시퀀스`);
-      } 
-      // 객체인 경우 (sequences 속성 또는 다른 구조)
-      else if (body && typeof body === 'object') {
-        // sequences 속성을 가진 경우
-        if (Array.isArray(body.sequences)) {
-          sequences = body.sequences;
-          console.log(`[API] 객체.sequences 형식 감지: ${sequences.length}개 시퀀스`);
-        } 
-        // 단일 시퀀스인 경우
-        else if (body.name || body.id) {
-          sequences = [body];
-          console.log(`[API] 단일 시퀀스 객체 감지`);
-        }
-        // 다른 구조를 가진 경우 (추가 처리 필요할 수 있음)
-        else {
-          console.log(`[API] 알 수 없는 객체 구조, 키:`, Object.keys(body));
-          
-          // 최선의 시도로 시퀀스 추출
-          for (const key in body) {
-            if (Array.isArray(body[key])) {
-              sequences = body[key];
-              console.log(`[API] 키 '${key}'에서 배열 발견: ${sequences.length}개 항목`);
-              break;
-            }
-          }
-        }
-      }
-    } else {
-      console.error(`[API] 지원하지 않는 Content-Type: ${contentType}`);
-      return NextResponse.json({ error: '지원하지 않는 Content-Type' }, { status: 400 });
+      logGroup.log(LogLevel.INFO, '시퀀스 데이터 로컬 스토리지에서 로드 성공');
+      logGroup.end();
+      return NextResponse.json(sequences);
     }
     
-    // 시퀀스 검증
-    if (!sequences || sequences.length === 0) {
-      console.error(`[API] 시퀀스가 없거나 빈 배열`);
-      return NextResponse.json({ error: '시퀀스가 없거나 빈 배열입니다' }, { status: 400 });
-    }
-    
-    console.log(`[API] 저장할 시퀀스 수: ${sequences.length}`);
-    
-    // Redis에 저장 시도
-    try {
-      if (process.env.USE_LOCAL_STORAGE !== 'true') {
-        const redis = await getRedisClient();
-        await redis.set('sequences', JSON.stringify(sequences));
-        console.log(`[API] 시퀀스 Redis에 저장 완료`);
-      } else {
-        // 로컬 스토리지 사용 (Redis 대체)
-        const localStateManager = await import('../../../lib/local-state-manager').then(module => module.default);
-        await localStateManager.setState('sequences', sequences);
-        console.log(`[API] 시퀀스 로컬 스토리지에 저장 완료`);
-      }
-    } catch (redisError) {
-      console.error(`[API] Redis/저장소 오류:`, redisError);
-      
-      // Redis 오류 시 로컬 스토리지 폴백
-      try {
-        const localStateManager = await import('../../../lib/local-state-manager').then(module => module.default);
-        await localStateManager.setState('sequences', sequences);
-        console.log(`[API] Redis 오류 후 로컬 스토리지로 폴백 성공`);
-      } catch (fallbackError) {
-        console.error(`[API] 로컬 스토리지 폴백 실패:`, fallbackError);
-        throw new Error('데이터 저장에 실패했습니다');
-      }
-    }
-    
-    return NextResponse.json({ 
-      success: true,
-      message: `${sequences.length}개 시퀀스 저장 완료`,
-      count: sequences.length
-    }, { status: 200, headers: corsHeaders });
-    
+    // 데이터를 찾을 수 없는 경우
+    logGroup.log(LogLevel.WARN, '시퀀스 데이터를 찾을 수 없음');
+    logGroup.end();
+    return NextResponse.json([]);
   } catch (error) {
-    console.error(`[API] 시퀀스 저장 오류:`, error);
-    return NextResponse.json({ 
-      error: '시퀀스 저장 중 오류가 발생했습니다',
-      message: error instanceof Error ? error.message : '알 수 없는 오류'
-    }, { status: 500, headers: corsHeaders });
+    logger.error('시퀀스 데이터 로드 중 오류 발생:', error);
+    logGroup.end();
+    return NextResponse.json({ error: '시퀀스 데이터 로드 중 오류 발생' }, { status: 500 });
   }
 }
 
-/**
- * 시퀀스 삭제 API - ID로 특정 시퀀스 삭제 또는 모든 시퀀스 삭제
- */
-export async function DELETE(req: NextRequest) {
+// POST 요청 처리
+export async function POST(request: NextRequest) {
+  const logGroup = createLogGroup('POST /api/sequences');
+  
   try {
-    console.log('[시퀀스 API] 시퀀스 삭제 시작');
-    
-    // URL에서 삭제할 시퀀스 ID 추출
-    const url = new URL(req.url);
-    const sequenceId = url.searchParams.get('id');
-    const deleteAll = url.searchParams.get('all') === 'true';
-    
-    console.log(`[시퀀스 API] 삭제 요청 유형: ${sequenceId ? '특정 ID 삭제' : (deleteAll ? '전체 삭제' : '삭제 대상 불명')}`);
-    
-    // 삭제 대상이 없으면 오류 반환
-    if (!sequenceId && !deleteAll) {
-      console.log('[시퀀스 API] 삭제할 시퀀스 ID가 지정되지 않음');
-      return NextResponse.json({
-        success: false,
-        error: '삭제할 시퀀스 ID가 지정되지 않았습니다. id 쿼리 파라미터를 사용하세요.'
-      }, { status: 400 });
+    // 요청 본문 파싱
+    let body;
+    try {
+      // 원시 텍스트로 요청 본문 저장
+      const rawText = await request.text();
+      logger.debug(`요청 본문 길이: ${rawText.length} 바이트`);
+      
+      // 요청 본문이 비어 있는 경우
+      if (!rawText || rawText.trim() === '') {
+        logger.warn('요청 본문이 비어 있음');
+        logGroup.end();
+        return NextResponse.json({ error: '요청 본문이 비어 있음' }, { status: 400 });
+      }
+      
+      // JSON 파싱 시도
+      body = JSON.parse(rawText);
+      logger.debug(`요청 본문 타입: ${typeof body}, ${Array.isArray(body) ? '배열' : '객체'}`);
+    } catch (error) {
+      logger.error('요청 본문 파싱 실패:', error);
+      logGroup.end();
+      return NextResponse.json({ error: '유효하지 않은 JSON 데이터' }, { status: 400 });
     }
     
-    try {
-      // Redis 클라이언트 가져오기
-      const redis = await getRedisClient();
-      console.log('[시퀀스 API] Redis 클라이언트 가져옴, 연결 상태:', redis.isOpen ? '연결됨' : '연결 안됨');
-      
-      // 기존 데이터 가져오기
-      const existingData = await redis.get(PROCESS_KEY);
-      let processesData = { processes: [] };
-      
-      if (existingData) {
-        try {
-          processesData = JSON.parse(existingData);
-          console.log('[시퀀스 API] 기존 데이터 파싱 성공');
-        } catch (e) {
-          console.error('[시퀀스 API] 기존 데이터 파싱 오류:', e);
-          return NextResponse.json({
-            success: false,
-            error: '데이터 파싱 오류'
-          }, { status: 500 });
-        }
-      } else {
-        console.log('[시퀀스 API] 저장된 데이터가 없음');
-        return NextResponse.json({
-          success: true,
-          message: '저장된 시퀀스가 없습니다.',
-          deletedCount: 0
-        });
+    // 요청 본문 유효성 검사 및 시퀀스 추출
+    let sequences = [];
+    
+    // 배열인 경우 직접 사용
+    if (Array.isArray(body)) {
+      sequences = body;
+      logger.debug(`배열 형식의 시퀀스 수신: ${sequences.length}개`);
+    } 
+    // 객체인 경우 데이터 추출 시도
+    else if (body && typeof body === 'object') {
+      // 다양한 속성 구조 처리를 시도
+      if (body.sequences && Array.isArray(body.sequences)) {
+        // {sequences: [...]} 형식
+        sequences = body.sequences;
+        logger.debug(`객체 내 sequences 속성에서 ${sequences.length}개 시퀀스 발견`);
+      } else if (body.data && Array.isArray(body.data)) {
+        // {data: [...]} 형식
+        sequences = body.data;
+        logger.debug(`객체 내 data 속성에서 ${sequences.length}개 시퀀스 발견`);
+      } else if (Object.values(body).length > 0 && Array.isArray(Object.values(body)[0])) {
+        // {someKey: [...]} 형식 (첫 번째 속성이 배열인 경우)
+        sequences = Object.values(body)[0] as any[];
+        logger.debug(`객체 내 첫 번째 배열 속성에서 ${sequences.length}개 시퀀스 발견`);
+    } else {
+        // 단일 객체를 배열로 변환 (예: 단일 시퀀스만 전송된 경우)
+        sequences = [body];
+        logger.debug(`단일 객체를 시퀀스 배열로 변환`);
       }
-      
-      // 모든 시퀀스를 삭제하는 경우
-      if (deleteAll) {
-        console.log('[시퀀스 API] 모든 시퀀스 삭제 요청');
-        
-        // 각 프로세스의 시퀀스 배열을 비움
-        let totalDeleted = 0;
-        
-        processesData.processes.forEach(process => {
-          if (process.sequences && Array.isArray(process.sequences)) {
-            totalDeleted += process.sequences.length;
-            process.sequences = [];
-            process.updatedAt = new Date().toISOString();
-          }
-        });
-        
-        // Redis에 저장
-        await redis.set(PROCESS_KEY, JSON.stringify(processesData));
-        console.log(`[시퀀스 API] 모든 시퀀스 삭제 완료, 총 ${totalDeleted}개 삭제됨`);
-        
-        // 캐시 업데이트
-        saveSequencesToCache({ sequences: [] });
-        
-        // 연결 종료
-        await redis.quit();
-        
-        return NextResponse.json({
-          success: true,
-          message: `모든 시퀀스가 삭제되었습니다.`,
-          deletedCount: totalDeleted
-        });
-      }
-      
-      // 특정 ID의 시퀀스 삭제
-      console.log(`[시퀀스 API] 시퀀스 ID:${sequenceId} 삭제 요청`);
-      
-      let found = false;
-      let deletedSequence = null;
-      
-      // 각 프로세스를 확인하여 해당 ID의 시퀀스 찾기
-      for (const process of processesData.processes) {
-        if (process.sequences && Array.isArray(process.sequences)) {
-          const originalLength = process.sequences.length;
-          
-          // 시퀀스 ID로 필터링하여 제거
-          const filteredSequences = process.sequences.filter(seq => {
-            if (seq.id === sequenceId) {
-              deletedSequence = {...seq};
-              found = true;
-              return false; // 해당 ID 시퀀스 제거
-            }
-            return true; // 다른 시퀀스 유지
-          });
-          
-          // 시퀀스가 삭제되었다면 프로세스 업데이트
-          if (originalLength !== filteredSequences.length) {
-            process.sequences = filteredSequences;
-            process.updatedAt = new Date().toISOString();
-            console.log(`[시퀀스 API] 프로세스(${process.id})에서 시퀀스 삭제됨`);
-          }
-        }
-      }
-      
-      if (!found) {
-        console.log(`[시퀀스 API] 시퀀스 ID:${sequenceId}를 찾을 수 없음`);
-        
-        // 연결 종료
-        await redis.quit();
-        
-        return NextResponse.json({
-          success: false,
-          error: `ID가 ${sequenceId}인 시퀀스를 찾을 수 없습니다.`
-        }, { status: 404 });
-      }
+    }
+    
+    // 시퀀스 데이터 검증
+    if (!Array.isArray(sequences) || sequences.length === 0) {
+      logger.warn('유효한 시퀀스 데이터가 없음');
+      logGroup.end();
+      return NextResponse.json({ error: '유효한 시퀀스 데이터가 없음' }, { status: 400 });
+    }
+    
+    // 시퀀스 데이터 로깅
+    logger.info(`${sequences.length}개 시퀀스 저장 시작`);
+    logger.debug(`첫 번째 시퀀스 샘플: ${JSON.stringify(sequences[0]).substring(0, 200)}...`);
       
       // Redis에 저장
-      await redis.set(PROCESS_KEY, JSON.stringify(processesData));
-      console.log(`[시퀀스 API] 시퀀스 ID:${sequenceId} 삭제 저장 완료`);
-      
-      // 캐시 업데이트
-      const allSequences = [];
-      processesData.processes.forEach(process => {
-        if (process.sequences && Array.isArray(process.sequences)) {
-          const processSequences = process.sequences.map(seq => ({
-            ...seq,
-            processId: process.id,
-            processName: process.name
-          }));
-          allSequences.push(...processSequences);
-        }
-      });
-      
-      saveSequencesToCache({ sequences: allSequences });
-      
-      // 연결 종료
-      await redis.quit();
-      
+    const client = await connectRedis();
+    
+    if (client) {
+      await client.set('sequences', JSON.stringify(sequences));
+      logger.info('시퀀스 Redis에 저장 성공');
+      logGroup.end();
       return NextResponse.json({
         success: true,
-        message: `ID가 ${sequenceId}인 시퀀스가 삭제되었습니다.`,
-        deletedSequence,
-        remainingCount: allSequences.length
-      }, { headers: corsHeaders });
-    } catch (redisError) {
-      console.error('[시퀀스 API] Redis 처리 중 오류:', redisError);
-      
-      return NextResponse.json({
-        success: false,
-        error: `시퀀스 삭제 중 오류가 발생했습니다: ${redisError instanceof Error ? redisError.message : String(redisError)}`
-      }, { status: 500 });
+        message: '시퀀스가 성공적으로 저장되었습니다.', 
+        count: sequences.length 
+      });
     }
-  } catch (error) {
-    console.error('[시퀀스 API] 시퀀스 삭제 실패 상세:', error);
     
-    return NextResponse.json({
-      success: false,
-      error: '시퀀스 삭제 실패',
-      details: error instanceof Error ? error.message : String(error)
-    }, { status: 500 });
+    // Redis 연결 실패 시 로컬 스토리지에 저장
+    if (shouldUseLocalStorage) {
+      const success = saveLocalRedisData({ sequences });
+      
+      if (success) {
+        logger.info('시퀀스 로컬 스토리지에 저장 성공');
+        logGroup.end();
+        return NextResponse.json({
+          success: true,
+          message: '시퀀스가 로컬 스토리지에 저장되었습니다.', 
+          count: sequences.length 
+        });
+      } else {
+        logger.error('시퀀스 로컬 스토리지 저장 실패');
+        logGroup.end();
+        return NextResponse.json({ error: '로컬 스토리지 저장 실패' }, { status: 500 });
+      }
+    }
+    
+    logger.error('Redis 및 로컬 스토리지 모두 사용할 수 없음');
+    logGroup.end();
+    return NextResponse.json({ error: '저장소에 저장할 수 없음' }, { status: 500 });
+  } catch (error) {
+    logger.error('시퀀스 저장 중 오류 발생:', error);
+    logGroup.end();
+    return NextResponse.json({ error: '시퀀스 저장 중 오류 발생' }, { status: 500 });
   }
 }
 
-// OPTIONS 메서드 추가 (CORS preflight 요청 처리)
+// OPTIONS 핸들러 (CORS)
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
-    headers: corsHeaders
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
+    }
   });
 } 

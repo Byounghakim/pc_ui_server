@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRedisClient } from '@/lib/redis-client';
-import localStateManager from '@/lib/local-state-manager';
+import fs from 'fs';
+import path from 'path';
+import { createClient } from 'redis';
+import { env, shouldUseLocalStorage, logger, LogLevel, createLogGroup } from '../../config/environment';
 
 // 시스템 상태 인터페이스
 interface SystemState {
@@ -31,37 +33,70 @@ let cachedState: any = null;
 let cacheTimestamp: number = 0;
 const CACHE_TTL_MS = 300000; // 5분 캐싱
 
-// 로컬 스토리지 모드 확인
-const isLocalStorageMode = process.env.USE_LOCAL_STORAGE === 'true';
+// CORS 헤더 설정
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+};
 
 /**
- * 객체 깊은 병합 함수
+ * 객체 깊은 병합 (Deep Merge) 함수
+ * 두 객체를 병합하여 새 객체 반환
  */
-function deepMerge(target: any, source: any): any {
-  const output = Object.assign({}, target);
-  
-  if (isObject(target) && isObject(source)) {
+function deepMerge(target: any, source: any) {
+  // 기본 경우: target이나 source가 객체가 아닌 경우
+  if (!isObject(target) || !isObject(source)) {
+    return source;
+  }
+
+  // 두 객체를 병합
     Object.keys(source).forEach(key => {
       if (isObject(source[key])) {
-        if (!(key in target)) {
-          Object.assign(output, { [key]: source[key] });
+      if (!target[key]) Object.assign(target, { [key]: {} });
+      deepMerge(target[key], source[key]);
         } else {
-          output[key] = deepMerge(target[key], source[key]);
-        }
-      } else {
-        Object.assign(output, { [key]: source[key] });
+      Object.assign(target, { [key]: source[key] });
       }
     });
-  }
   
-  return output;
+  return target;
 }
 
 /**
- * 객체 타입 확인 함수
+ * 값이 객체인지 확인하는 함수
  */
-function isObject(item: any): boolean {
+function isObject(item: any) {
   return (item && typeof item === 'object' && !Array.isArray(item));
+}
+
+/**
+ * API 요청 재시도 래퍼 함수
+ */
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const config = getApiRetryConfig();
+  let lastError: any;
+  
+  for (let attempt = 1; attempt <= config.maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      console.error(`API 요청 실패 (시도 ${attempt}/${config.maxRetries}):`, error);
+      
+      if (attempt < config.maxRetries) {
+        // 지수 백오프 - 재시도마다 대기 시간 증가
+        const delay = config.exponentialBackoff 
+          ? config.retryDelay * Math.pow(2, attempt - 1)
+          : config.retryDelay;
+          
+        console.log(`${delay}ms 후 재시도...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError;
 }
 
 /**
@@ -92,248 +127,285 @@ function getDefaultState(): SystemState {
   };
 }
 
-/**
- * 시스템 상태 조회 API
- */
-export async function GET(req: NextRequest) {
+// Redis 클라이언트 설정
+const redisClient = shouldUseLocalStorage ? null : createClient({
+  url: env.redisUrl || `redis://${env.redisHost}:${env.redisPort}`,
+  password: env.redisPassword,
+});
+
+// Redis 연결 준비
+async function connectRedis() {
+  if (shouldUseLocalStorage) {
+    logger.info('로컬 스토리지 모드 사용 중: Redis 연결 생략됨');
+    return null;
+  }
+
   try {
-    const url = new URL(req.url);
-    const key = url.searchParams.get('key');
-
-    if (!key) {
-      return NextResponse.json({ error: '상태 키가 필요합니다.' }, { status: 400 });
+    if (!redisClient?.isOpen) {
+      await redisClient?.connect();
+      logger.info('Redis 연결 성공');
     }
-
-    // 로컬 스토리지 모드인 경우
-    if (isLocalStorageMode) {
-      console.log(`로컬 스토리지에서 상태 조회: ${key}`);
-      try {
-        const state = await localStateManager.getState(key);
-        
-        // 상태가 없으면 기본 상태 반환
-        if (state === null || state === undefined) {
-          const defaultState = getDefaultState();
-          await localStateManager.setState(key, defaultState);
-          return NextResponse.json({ state: defaultState });
-        }
-        
-        return NextResponse.json({ state });
-      } catch (error) {
-        console.error('로컬 스토리지 상태 조회 오류:', error);
-        return NextResponse.json({ 
-          error: `로컬 스토리지 상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
-        }, { status: 500 });
-      }
-    } 
-    // Redis 모드
-    else {
-      // Redis 클라이언트 가져오기
-      const redis = await getRedisClient();
-      if (!redis || !redis.isOpen) {
-        return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
-      }
-
-      try {
-        const stateStr = await redis.get(key);
-        
-        if (!stateStr || stateStr === 'undefined' || stateStr.trim() === '') {
-          const defaultState = getDefaultState();
-          await redis.set(key, JSON.stringify(defaultState));
-          return NextResponse.json({ state: defaultState });
-        }
-        
-        try {
-          const state = JSON.parse(stateStr);
-          return NextResponse.json({ state });
-        } catch (parseError) {
-          console.error(`상태 데이터 파싱 오류(${key}):`, parseError, '원본 데이터:', stateStr);
-          // 파싱 오류 시 기본 상태 반환
-          const defaultState = getDefaultState();
-          await redis.set(key, JSON.stringify(defaultState));
-          return NextResponse.json({ state: defaultState });
-        }
-      } catch (error) {
-        console.error('Redis 상태 조회 오류:', error);
-        return NextResponse.json({
-          error: `Redis 상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
-        }, { status: 500 });
-      }
-    }
+    return redisClient;
   } catch (error) {
-    console.error('상태 조회 중 오류 발생:', error);
-    return NextResponse.json({
-      error: `상태 조회 오류: ${error instanceof Error ? error.message : String(error)}` 
-    }, { status: 500 });
+    logger.error('Redis 연결 실패:', error);
+    return null;
   }
 }
 
-/**
- * 시스템 상태 변경 API
- */
-export async function POST(req: NextRequest) {
+// 로컬 스토리지 관련 함수
+const LOCAL_STORAGE_PATH = env.localStoragePath || 'local-redis-state.json';
+
+// 로컬 스토리지에서 데이터 불러오기
+function getLocalRedisData() {
+  const logGroup = createLogGroup('getLocalRedisData');
+  
   try {
-    console.log('[DEBUG] POST 요청 처리 시작');
-    let body;
-    let rawText = '';
-    
-    try {
-      rawText = await req.text();
-      console.log('[DEBUG] 원본 요청 본문 길이:', rawText.length);
-      console.log('[DEBUG] 원본 요청 본문 샘플:', rawText.substring(0, 100) + (rawText.length > 100 ? '...' : ''));
-      
-      if (!rawText || rawText.trim() === '') {
-        console.error('[DEBUG] 요청 본문이 비어 있습니다.');
-        return NextResponse.json({ error: '요청 본문이 비어 있습니다.' }, { status: 400 });
-      }
-      
-      try {
-        body = JSON.parse(rawText);
-        console.log('[DEBUG] 파싱된 요청 본문 타입:', typeof body, Array.isArray(body) ? '(배열)' : body === null ? '(null)' : '(객체)');
-      } catch (parseError) {
-        console.error('[DEBUG] JSON 파싱 오류:', parseError);
-        // 잘못된 JSON 형식인 경우 텍스트 그대로 사용
-        body = { state: rawText };
-        console.log('[DEBUG] 파싱 오류로 원본 텍스트를 state로 설정');
-      }
-    } catch (reqError) {
-      console.error('[DEBUG] 요청 처리 오류:', reqError);
-      return NextResponse.json({ 
-        error: '요청 처리 오류', 
-        details: reqError instanceof Error ? reqError.message : String(reqError) 
-      }, { status: 400 });
+    if (!fs.existsSync(LOCAL_STORAGE_PATH)) {
+      logger.debug(`로컬 스토리지 파일 없음: ${LOCAL_STORAGE_PATH}`);
+      return {};
     }
     
-    // body가 null이거나 undefined인 경우 처리
-    if (body === null || body === undefined) {
-      console.log('[DEBUG] 요청 본문이 null 또는 undefined, 빈 객체로 설정');
-      body = {};
+    const data = fs.readFileSync(LOCAL_STORAGE_PATH, 'utf8');
+    const parsedData = JSON.parse(data);
+    logger.debug(`로컬 스토리지에서 데이터 로드 성공: ${Object.keys(parsedData).length} 항목`);
+    logGroup.end();
+    return parsedData;
+  } catch (error) {
+    logger.error('로컬 스토리지에서 데이터 로드 실패:', error);
+    logGroup.end();
+    return {};
+  }
+}
+
+// 로컬 스토리지에 데이터 저장하기
+function saveLocalRedisData(data: any) {
+  const logGroup = createLogGroup('saveLocalRedisData');
+  
+  try {
+    const currentData = getLocalRedisData();
+    const newData = { ...currentData, ...data };
+    
+    // 디렉토리 생성 (없는 경우)
+    const directory = path.dirname(LOCAL_STORAGE_PATH);
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory, { recursive: true });
     }
     
-    // key와 state 속성 확인
-    console.log('[DEBUG] key 속성 확인:', body.key);
-    console.log('[DEBUG] body 속성 타입:', Object.keys(body).join(', '));
+    fs.writeFileSync(LOCAL_STORAGE_PATH, JSON.stringify(newData, null, 2), 'utf8');
+    logger.debug(`로컬 스토리지에 데이터 저장 성공: ${Object.keys(data).length} 항목`);
+    logGroup.end();
+    return true;
+  } catch (error) {
+    logger.error('로컬 스토리지에 데이터 저장 실패:', error);
+    logGroup.end();
+    return false;
+  }
+}
+
+// GET 요청 처리
+export async function GET(request: NextRequest) {
+  const logGroup = createLogGroup('GET /api/state');
+  const url = new URL(request.url);
+  const key = url.searchParams.get('key');
+  
+  logger.info(`상태 요청: ${key || '전체'}`);
+  
+  try {
+    // Redis 연결
+    const client = await connectRedis();
     
-    // key 속성이 없는 경우 body 자체를 state로 취급하고 기본 키 사용
-    let key = body.key;
-    let state = body.state;
-
-    // key 속성이 없는 경우 (클라이언트에서 직접 state 데이터만 전송하는 경우)
-    if (!key) {
-      console.log('[DEBUG] key 속성이 없어 기본값 사용: system:state');
-      key = 'system:state';
-      
-      // state 속성이 없으면 body 자체를 state로 사용
-      if (!state) {
-        state = body;
-        console.log('[DEBUG] state 속성이 없어 body 자체를 state로 사용');
-      }
-    }
-
-    // 최종 state 데이터 확인
-    if (!state || (typeof state === 'object' && Object.keys(state).length === 0)) {
-      // 빈 객체나 undefined/null인 경우 rawText 그대로 사용
-      if (rawText && rawText.trim() !== '') {
-        try {
-          state = JSON.parse(rawText);
-          console.log('[DEBUG] state가 비어있어 원본 요청 본문을 state로 설정');
-        } catch (e) {
-          console.log('[DEBUG] 원본 요청 본문 파싱 실패, 텍스트 그대로 사용');
-          state = { rawData: rawText };
-        }
-      } else {
-        console.error('[DEBUG] state 데이터가 유효하지 않습니다.');
-        return NextResponse.json({ 
-          error: '유효한 상태 데이터가 없습니다.', 
-          receivedData: rawText.substring(0, 100)
-        }, { status: 400 });
-      }
-    }
-
-    console.log('[DEBUG] 처리할 상태 데이터 타입:', typeof state);
-    console.log('[DEBUG] 처리할 상태 데이터 샘플:', 
-      typeof state === 'object' 
-        ? JSON.stringify(state).substring(0, 100) + '...' 
-        : state.toString().substring(0, 100) + '...');
-
-    // 로컬 스토리지 모드인 경우
-    if (isLocalStorageMode) {
-      console.log(`[DEBUG] 로컬 스토리지 모드로 상태 저장: ${key}`);
-      
-      try {
-        // 기존 상태 조회
-        const existingState = await localStateManager.getState(key) || {};
+    if (client) {
+      // 특정 키 요청인 경우
+      if (key) {
+        const value = await client.get(key);
         
-        // 새 상태와 깊은 병합
-        const mergedState = deepMerge(existingState, state);
-        
-        // 타임스탬프 추가
-        mergedState.timestamp = Date.now();
-        
-        // 로컬 스토리지에 저장
-        await localStateManager.setState(key, mergedState);
-        
-        console.log('[DEBUG] 상태가 로컬 스토리지에 저장되었습니다.');
-        return NextResponse.json({
-          success: true,
-          message: '상태가 로컬 스토리지에 저장되었습니다.' 
-        });
-      } catch (error) {
-        console.error('[DEBUG] 로컬 스토리지 저장 오류:', error);
-        return NextResponse.json({ 
-          error: `로컬 스토리지 상태 저장 오류: ${error instanceof Error ? error.message : String(error)}` 
-        }, { status: 500 });
-      }
-    } 
-    // Redis 모드
-    else {
-      // Redis 클라이언트 가져오기
-      const redis = await getRedisClient();
-      if (!redis || !redis.isOpen) {
-        return NextResponse.json({ error: 'Redis 연결 실패' }, { status: 500 });
-      }
-
-      try {
-        // 기존 상태 조회
-        const existingStateStr = await redis.get(key);
-        let existingState = {};
-
-        if (existingStateStr && existingStateStr !== 'undefined' && existingStateStr.trim() !== '') {
+        if (value) {
+          logger.debug(`키 '${key}'에 대한 값 찾음`);
+          logGroup.end();
           try {
-            existingState = JSON.parse(existingStateStr);
-            if (typeof existingState !== 'object' || existingState === null) {
-              existingState = {};
-            }
-          } catch (parseError) {
-            console.error(`기존 상태 파싱 오류(${key}):`, parseError);
-            existingState = {};
+            return NextResponse.json(JSON.parse(value));
+          } catch {
+            return NextResponse.json(value);
           }
         }
-
-        // 새 상태와 깊은 병합
-        const mergedState = deepMerge(existingState, state);
         
-        // 타임스탬프 추가
-        mergedState.timestamp = Date.now();
-        
-        // 상태 저장
-        await redis.set(key, JSON.stringify(mergedState));
-      
-        return NextResponse.json({
-          success: true,
-          message: '상태가 Redis에 저장되었습니다.' 
-        });
-      } catch (error) {
-        console.error('Redis 상태 저장 오류:', error);
-        return NextResponse.json({ 
-          error: `Redis 상태 저장 오류: ${error instanceof Error ? error.message : String(error)}` 
-        }, { status: 500 });
+        logger.debug(`키 '${key}'에 대한 값 없음`);
+        logGroup.end();
+        return NextResponse.json({ error: `키 '${key}'에 대한 값을 찾을 수 없음` }, { status: 404 });
       }
+      
+      // 모든 키 요청인 경우
+      const keys = await client.keys('*');
+      const result: Record<string, any> = {};
+      
+      for (const k of keys) {
+        const value = await client.get(k);
+        if (value) {
+          try {
+            result[k] = JSON.parse(value);
+          } catch {
+            result[k] = value;
+          }
+        }
+      }
+      
+      logger.debug(`${Object.keys(result).length}개 키 값 로드 성공`);
+      logGroup.end();
+      return NextResponse.json(result);
     }
+    
+    // 로컬 스토리지 사용
+    if (shouldUseLocalStorage) {
+      const localData = getLocalRedisData();
+      
+      // 특정 키 요청인 경우
+      if (key) {
+        if (key in localData) {
+          logger.debug(`로컬 스토리지에서 키 '${key}'에 대한 값 찾음`);
+          logGroup.end();
+          return NextResponse.json(localData[key]);
+        }
+        
+        logger.debug(`로컬 스토리지에서 키 '${key}'에 대한 값 없음`);
+        logGroup.end();
+        return NextResponse.json({ error: `키 '${key}'에 대한 값을 찾을 수 없음` }, { status: 404 });
+      }
+      
+      // 모든 키 요청인 경우
+      logger.debug(`로컬 스토리지에서 ${Object.keys(localData).length}개 키 값 로드 성공`);
+      logGroup.end();
+      return NextResponse.json(localData);
+    }
+    
+    // 저장소에 연결할 수 없는 경우
+    logger.error('사용 가능한 저장소 없음');
+    logGroup.end();
+    return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500 });
   } catch (error) {
-    console.error('요청 처리 중 오류 발생:', error);
-    return NextResponse.json({
-      error: `요청 처리 오류: ${error instanceof Error ? error.message : String(error)}` 
-    }, { status: 500 });
+    logger.error('상태 조회 중 오류 발생:', error);
+    logGroup.end();
+    return NextResponse.json({ error: '상태 조회 중 오류 발생' }, { status: 500 });
+  }
+}
+
+// POST 요청 처리
+export async function POST(request: NextRequest) {
+  const logGroup = createLogGroup('POST /api/state');
+  
+  try {
+    let body;
+    let rawText;
+    
+    try {
+      // 원시 텍스트로 요청 본문 저장
+      rawText = await request.text();
+      logger.debug(`요청 본문 길이: ${rawText.length} 바이트`);
+      
+      // 요청 본문이 비어 있는 경우
+      if (!rawText || rawText.trim() === '') {
+        logger.warn('요청 본문이 비어 있음');
+        logGroup.end();
+        return NextResponse.json({ error: '요청 본문이 비어 있음' }, { status: 400 });
+      }
+      
+      // JSON 파싱 시도
+      body = JSON.parse(rawText);
+      logger.debug(`요청 본문 타입: ${typeof body}, ${Array.isArray(body) ? '배열' : '객체'}`);
+    } catch (error) {
+      logger.error('요청 본문 파싱 실패:', error);
+      logGroup.end();
+      return NextResponse.json({ error: '유효하지 않은 JSON 데이터' }, { status: 400 });
+    }
+    
+    // 키 파라미터 확인
+    const url = new URL(request.url);
+    const key = url.searchParams.get('key');
+    
+    // 키가 제공된 경우
+    if (key) {
+      logger.info(`상태 저장: 키 '${key}'에 값 저장 중`);
+      
+      // Redis 연결
+      const client = await connectRedis();
+      
+      if (client) {
+        // Redis에 상태 저장
+        const value = typeof body === 'string' ? body : JSON.stringify(body);
+        await client.set(key, value);
+        
+        logger.info(`상태가 키 '${key}'에 성공적으로 저장됨`);
+        logGroup.end();
+        return NextResponse.json({ message: `상태가 키 '${key}'에 성공적으로 저장됨` });
+      }
+      
+      // 로컬 스토리지에 저장
+      if (shouldUseLocalStorage) {
+        const data = { [key]: body };
+        const success = saveLocalRedisData(data);
+        
+        if (success) {
+          logger.info(`상태가 키 '${key}'에 로컬 스토리지에 성공적으로 저장됨`);
+          logGroup.end();
+          return NextResponse.json({ message: `상태가 키 '${key}'에 로컬 스토리지에 성공적으로 저장됨` });
+        } else {
+          logger.error(`키 '${key}'에 대한 상태 저장 실패`);
+          logGroup.end();
+          return NextResponse.json({ error: '상태 저장 실패' }, { status: 500 });
+        }
+      }
+      
+      logger.error('사용 가능한 저장소 없음');
+      logGroup.end();
+      return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500 });
+    } 
+    // 키가 제공되지 않은 경우, 본문 자체를 상태로 처리
+    else if (typeof body === 'object' && !Array.isArray(body)) {
+      logger.info(`전체 상태 저장: ${Object.keys(body).length}개 키`);
+      
+      // Redis 연결
+      const client = await connectRedis();
+      
+      if (client) {
+        // 각 키/값 쌍을 Redis에 저장
+        for (const [k, v] of Object.entries(body)) {
+          const value = typeof v === 'string' ? v : JSON.stringify(v);
+          await client.set(k, value);
+        }
+        
+        logger.info(`${Object.keys(body).length}개 키에 대한 상태가 성공적으로 저장됨`);
+        logGroup.end();
+        return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 성공적으로 저장됨` });
+      }
+      
+      // 로컬 스토리지에 저장
+      if (shouldUseLocalStorage) {
+        const success = saveLocalRedisData(body);
+        
+        if (success) {
+          logger.info(`${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨`);
+          logGroup.end();
+          return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨` });
+        } else {
+          logger.error('상태 저장 실패');
+          logGroup.end();
+          return NextResponse.json({ error: '상태 저장 실패' }, { status: 500 });
+        }
+      }
+      
+      logger.error('사용 가능한 저장소 없음');
+      logGroup.end();
+      return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500 });
+    }
+    
+    // 키도 없고 객체도 아닌 경우
+    logger.warn('유효하지 않은 요청 형식: 키 파라미터가 없고 요청 본문이 객체가 아님');
+    logGroup.end();
+    return NextResponse.json({ error: '유효하지 않은 요청 형식' }, { status: 400 });
+    
+  } catch (error) {
+    logger.error('상태 저장 중 오류 발생:', error);
+    logGroup.end();
+    return NextResponse.json({ error: '상태 저장 중 오류 발생' }, { status: 500 });
   }
 }
 
@@ -341,10 +413,6 @@ export async function POST(req: NextRequest) {
 export async function OPTIONS() {
   return new NextResponse(null, {
     status: 204,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
-    }
+    headers: corsHeaders
   });
 } 
