@@ -18,6 +18,7 @@ const saveState = async (stateToSave: any) => {
   try {
     // 로컬 스토리지에 상태 저장
     if (typeof window !== 'undefined') {
+      // 전체 상태를 로컬 스토리지에 저장
       localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
       
       // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
@@ -25,7 +26,15 @@ const saveState = async (stateToSave: any) => {
       
       // IndexedDB에도 저장
       if (typeof saveToIndexedDB === 'function') {
-        saveToIndexedDB(stateToSave);
+        // extractionCommand 필드를 제외한 복사본 생성
+        const stateForStorage = {...stateToSave};
+        
+        // 서버와 충돌할 수 있는 필드 제거
+        if (stateForStorage.extractionCommand) {
+          delete stateForStorage.extractionCommand;
+        }
+        
+        saveToIndexedDB(stateForStorage);
       }
       
       // 다른 탭/창에 상태 변경 알림
@@ -3359,7 +3368,7 @@ export default function TankSystem({
     if (extractionCommand?.active && allPumpsOff) {
       console.log('공정 완료 감지: 추출 명령 비활성화');
       
-      // 비활성 상태로 업데이트
+      // 비활성 상태로 업데이트 - 로컬에만 저장하고 서버에는 전송하지 않음
       setExtractionCommand(prev => prev ? {...prev, active: false} : null);
       
       // 로컬 스토리지 업데이트
