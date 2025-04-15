@@ -1,5 +1,8 @@
+import EventEmitter from 'events';
+import * as fs from 'fs';
 import mqtt from "mqtt";
 import { MQTT_TOPICS } from './mqtt-topics';
+import { activeMqttUrl, env, isDevelopment, isProduction, shouldUseLocalStorage } from '../app/config/environment';
 
 // 상태 저장 래퍼 함수
 const saveState = (key: string, state: any) => {
@@ -26,23 +29,22 @@ const loadState = (key: string) => {
 
 // MQTT 서버 설정 - 환경 변수 사용
 const MQTT_CONFIG = {
-  server: typeof window !== 'undefined' 
-    ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-        ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884'
-        : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884')
-    : (process.env.NODE_ENV === 'development'
-        ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://dev.codingpen.com:1884'
-        : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://api.codingpen.com:8884'),
-  username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
-  password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || 'XihQ2Q%RaS9u#Z3g'
+  server: activeMqttUrl,
+  username: env.mqttUsername,
+  password: env.mqttPassword
+};
+
+// 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  return `mqtt-client-${Math.random().toString(16).substring(2, 10)}-${Date.now().toString(16)}`;
 };
 
 // MQTT 브로커 연결 옵션
 const MQTT_OPTIONS = {
-  clientId: `tank-system-client-${Date.now()}`,
-  clean: true,
+  clientId: generateClientId(),
+  clean: false,
   reconnectPeriod: 5000, // 5초 간격으로 재연결 시도
-  connectTimeout: 30000, // 30초 연결 타임아웃
+  connectTimeout: 30 * 1000, // 30초 연결 타임아웃
   username: MQTT_CONFIG.username,
   password: MQTT_CONFIG.password
 };
@@ -270,7 +272,7 @@ class MqttClient {
       // MQTT 연결 옵션 (미리 정의된 옵션 사용)
       const options: mqtt.IClientOptions = {
         ...MQTT_OPTIONS,
-        clientId: `client_${Math.random().toString(16).substring(2, 10)}`,
+        clientId: generateClientId(),
         username: user,
         password: pass
       };
