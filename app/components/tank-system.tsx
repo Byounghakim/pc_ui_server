@@ -4314,9 +4314,16 @@ export default function TankSystem({
                         // 최신 JSON 데이터에서 repetition 찾기
                         const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                         if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          if (jsonData.repetition_count && jsonData.repetition) {
-                            return `${jsonData.repetition_count - jsonData.repetition}회 남음`;
+                          // JSON 형식 검증 추가
+                          const rawJson = latestJsonMsg.rawJson.trim();
+                          if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
+                            const jsonData = JSON.parse(rawJson);
+                            if (jsonData.repetition_count && jsonData.repetition) {
+                              return `${jsonData.repetition_count - jsonData.repetition}회 남음`;
+                            }
+                          } else {
+                            // JSON이 아닌 경우 기본값 사용
+                            console.log('비 JSON 형식 메시지 무시:', rawJson.substring(0, 30));
                           }
                         }
                       } catch (e) {
@@ -4350,16 +4357,23 @@ export default function TankSystem({
                         try {
                           const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                           if (latestJsonMsg && latestJsonMsg.rawJson) {
-                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                            // process_time과 total_remaining으로 진행률 계산
-                            if (jsonData.process_time && jsonData.total_remaining) {
-                              const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
-                              const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
-                              
-                              if (totalTime > 0 && totalRemaining >= 0) {
-                                // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
-                                percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
+                            // JSON 형식 검증 추가
+                            const rawJson = latestJsonMsg.rawJson.trim();
+                            if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
+                              const jsonData = JSON.parse(rawJson);
+                              // process_time과 total_remaining으로 진행률 계산
+                              if (jsonData.process_time && jsonData.total_remaining) {
+                                const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
+                                const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
+                                
+                                if (totalTime > 0 && totalRemaining >= 0) {
+                                  // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
+                                  percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
+                                }
                               }
+                            } else {
+                              // JSON이 아닌 경우 로그만 남기고 기본값 사용
+                              console.log('비 JSON 형식 메시지 진행 정보 무시:', rawJson.substring(0, 30));
                             }
                           }
                         } catch (e) {
@@ -4407,63 +4421,70 @@ export default function TankSystem({
                         // 최신 JSON 데이터에서 펌프 진행 정보 찾기
                         const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                         if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          
-                          // 대기 상태인 경우 - 고정 값으로 표시
-                          if (jsonData.process_info === "waiting") {
-                            const pumpId = jsonData.pump_id || 0;
-                            return (
-                              <div className="flex items-center space-x-2">
-                                <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(대기):</span>
-                                <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                  <div 
-                                    className="h-full bg-yellow-200 rounded-full"
-                                    style={{ width: '100%' }}
-                                  ></div>
+                          // JSON 형식 검증 추가
+                          const rawJson = latestJsonMsg.rawJson.trim();
+                          if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
+                            const jsonData = JSON.parse(rawJson);
+                            
+                            // 대기 상태인 경우 - 고정 값으로 표시
+                            if (jsonData.process_info === "waiting") {
+                              const pumpId = jsonData.pump_id || 0;
+                              return (
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(대기):</span>
+                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                    <div 
+                                      className="h-full bg-yellow-200 rounded-full"
+                                      style={{ width: '100%' }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-[9px] font-semibold text-yellow-700">대기중</span>
                                 </div>
-                                <span className="text-[9px] font-semibold text-yellow-700">대기중</span>
-                              </div>
-                            );
-                          }
-                          
-                          // 일반 작업 상태
-                          if (jsonData.pump_id) {
-                            const pumpMatch = String(jsonData.pump_id).match(/(\d+)\((\d+)\/(\d+)\)/);
-                            if (pumpMatch) {
-                              const pumpId = parseInt(pumpMatch[1], 10);
-                              const current = parseInt(pumpMatch[2], 10);
-                              const total = parseInt(pumpMatch[3], 10);
-                              if (!isNaN(current) && !isNaN(total) && total > 0) {
-                                const pumpPercent = Math.min(100, Math.floor((current / total) * 100));
+                              );
+                            }
+                            
+                            // 일반 작업 상태
+                            if (jsonData.pump_id) {
+                              const pumpMatch = String(jsonData.pump_id).match(/(\d+)\((\d+)\/(\d+)\)/);
+                              if (pumpMatch) {
+                                const pumpId = parseInt(pumpMatch[1], 10);
+                                const current = parseInt(pumpMatch[2], 10);
+                                const total = parseInt(pumpMatch[3], 10);
+                                if (!isNaN(current) && !isNaN(total) && total > 0) {
+                                  const pumpPercent = Math.min(100, Math.floor((current / total) * 100));
+                                  return (
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
+                                      <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                        <div 
+                                          className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
+                                          style={{ width: `${pumpPercent}%` }}
+                                        ></div>
+                                      </div>
+                                      <span className="text-[9px] font-semibold text-yellow-700">{pumpPercent}%</span>
+                                    </div>
+                                  );
+                                }
+                              } else if (typeof jsonData.pump_id === 'number') {
+                                // 펌프 ID가 숫자인 경우 - 단순히 펌프 번호만 표시
+                                const pumpId = jsonData.pump_id;
                                 return (
                                   <div className="flex items-center space-x-2">
                                     <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
                                     <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
                                       <div 
                                         className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
-                                        style={{ width: `${pumpPercent}%` }}
+                                        style={{ width: '50%' }}
                                       ></div>
                                     </div>
-                                    <span className="text-[9px] font-semibold text-yellow-700">{pumpPercent}%</span>
+                                    <span className="text-[9px] font-semibold text-yellow-700">진행중</span>
                                   </div>
                                 );
                               }
-                            } else if (typeof jsonData.pump_id === 'number') {
-                              // 펌프 ID가 숫자인 경우 - 단순히 펌프 번호만 표시
-                              const pumpId = jsonData.pump_id;
-                              return (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
-                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
-                                      style={{ width: '50%' }}
-                                    ></div>
-                                  </div>
-                                  <span className="text-[9px] font-semibold text-yellow-700">진행중</span>
-                                </div>
-                              );
                             }
+                          } else {
+                            // JSON이 아닌 경우, 밸브 상태 정보일 수 있음
+                            console.log('비 JSON 형식 메시지 펌프 정보 무시:', rawJson.substring(0, 30));
                           }
                         }
                       } catch (e) {
@@ -4491,30 +4512,37 @@ export default function TankSystem({
                         // 최신 JSON 데이터에서 대기시간 정보 찾기
                         const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
                         if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          
-                          // 대기 상태인 경우에 대기시간 카운터 표시
-                          if (jsonData.process_info === "waiting" && jsonData.remaining_time !== undefined && jsonData.total_time !== undefined) {
-                            const remainingTime = parseInt(String(jsonData.remaining_time), 10);
-                            const totalTime = parseInt(String(jsonData.total_time), 10);
+                          // JSON 형식 검증 추가
+                          const rawJson = latestJsonMsg.rawJson.trim();
+                          if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
+                            const jsonData = JSON.parse(rawJson);
                             
-                            if (!isNaN(remainingTime) && !isNaN(totalTime) && totalTime > 0) {
-                              const elapsedTime = totalTime - remainingTime;
-                              const waitPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / totalTime) * 100)));
+                            // 대기 상태인 경우에 대기시간 카운터 표시
+                            if (jsonData.process_info === "waiting" && jsonData.remaining_time !== undefined && jsonData.total_time !== undefined) {
+                              const remainingTime = parseInt(String(jsonData.remaining_time), 10);
+                              const totalTime = parseInt(String(jsonData.total_time), 10);
                               
-                              return (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-blue-700 w-14">대기카운터:</span>
-                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-in-out"
-                                      style={{ width: `${waitPercent}%` }}
-                                    ></div>
+                              if (!isNaN(remainingTime) && !isNaN(totalTime) && totalTime > 0) {
+                                const elapsedTime = totalTime - remainingTime;
+                                const waitPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / totalTime) * 100)));
+                                
+                                return (
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-[10px] font-medium text-blue-700 w-14">대기카운터:</span>
+                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div 
+                                        className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-in-out"
+                                        style={{ width: `${waitPercent}%` }}
+                                      ></div>
+                                    </div>
+                                    <span className="text-[9px] font-semibold text-blue-700">{remainingTime}초/{totalTime}초</span>
                                   </div>
-                                  <span className="text-[9px] font-semibold text-blue-700">{remainingTime}초/{totalTime}초</span>
-                                </div>
-                              );
+                                );
+                              }
                             }
+                          } else {
+                            // JSON이 아닌 경우 무시
+                            console.log('비 JSON 형식 메시지 대기시간 정보 무시:', rawJson.substring(0, 30));
                           }
                         }
                       } catch (e) {
