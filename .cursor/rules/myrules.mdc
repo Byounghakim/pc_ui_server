@@ -1,9 +1,13 @@
 ---
-description:
-globs:
+description: 
+globs: 
+alwaysApply: false
 ---
 
 # Your rule content
 
-- You can @ files here
-- You can use markdown but dont have to
+1. 단계별로 작업을 진행하고 각 단계마다 명확한 번호를 붙입니다.
+2. 각 단계가 마무리될 때마다 반드시 피드백을 제공합니다.
+3. 진행 방향과 상황에 대해 수시로 피드백을 제공합니다.
+4. 문제가 발생하면 해당 번호 단계로 쉽게 돌아갈 수 있도록 명확히 합니다.
+5. 모든 소통은 한국어로 진행합니다.

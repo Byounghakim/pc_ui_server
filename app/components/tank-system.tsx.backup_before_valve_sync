@@ -18,39 +18,16 @@ const saveState = async (stateToSave: any) => {
   try {
     // 로컬 스토리지에 상태 저장
     if (typeof window !== 'undefined') {
-      // 상태에 설명이 없으면 기본값 추가 (본탱크수집 방지)
-      const stateWithDesc = { ...stateToSave };
-      
-      // 밸브 상태에 따라 적절한 설명 설정 (기본값 전체순환/추출순환)
-      if (stateWithDesc.valveState === '0100') {
-        if (!stateWithDesc.valveADesc) {
-          stateWithDesc.valveADesc = '전체순환'; // '본탱크수집' 대신 '전체순환' 사용
-        }
-        if (!stateWithDesc.valveBDesc) {
-          stateWithDesc.valveBDesc = 'ON';
-        }
-      } else if (stateWithDesc.valveState && stateWithDesc.valveState.length >= 2) {
-        const v1 = parseInt(stateWithDesc.valveState[0]) || 0;
-        const v2 = parseInt(stateWithDesc.valveState[1]) || 0;
-        
-        if (!stateWithDesc.valveADesc) {
-          stateWithDesc.valveADesc = v1 === 1 ? '추출순환' : '전체순환';
-        }
-        if (!stateWithDesc.valveBDesc) {
-          stateWithDesc.valveBDesc = v2 === 1 ? 'ON' : 'OFF';
-        }
-      }
-      
       // 전체 상태를 로컬 스토리지에 저장
-      const stateString = JSON.stringify(stateWithDesc);
-      localStorage.setItem('tankSystemState', stateString);
-      console.log('개선된 밸브 상태 저장:', stateWithDesc.valveState, 
-        '설명:', stateWithDesc.valveADesc, stateWithDesc.valveBDesc);
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
       
       // IndexedDB에도 저장
       if (typeof saveToIndexedDB === 'function') {
         // extractionCommand 필드를 제외한 복사본 생성
-        const stateForStorage = {...stateWithDesc};
+        const stateForStorage = {...stateToSave};
         
         // 서버와 충돌할 수 있는 필드 제거
         if (stateForStorage.extractionCommand) {
@@ -1743,43 +1720,13 @@ export default function TankSystem({
     // 특수 케이스: 0100 (밸브2 OFF, 밸브1 ON)
     if (tankData.valveState === '0100') {
       console.log('특수 케이스 감지: 0100 - 밸브2 OFF, 밸브1 ON');
-      
-      // 저장된 상태에서 설명 불러오기 시도
-      const savedState = loadState();
-      
-      // 고정된 '본탱크수집' 지정을 피하고 저장된 값 또는 일반 값 사용
-      let valveADesc = '전체순환'; // 기본값 '전체순환'으로 설정
-      let valveBDesc = 'ON';       // 기본값 'ON'으로 설정
-      
-      // 저장된 상태에서 설명 가져오기 시도
-      if (savedState?.valveADesc) {
-        valveADesc = savedState.valveADesc;
-        console.log('0100 케이스: 저장된 valveADesc 사용:', valveADesc);
-      } else if (tankData.valveADesc) {
-        valveADesc = tankData.valveADesc;
-        console.log('0100 케이스: 현재 tankData.valveADesc 사용:', valveADesc);
-      }
-      
-      if (savedState?.valveBDesc) {
-        valveBDesc = savedState.valveBDesc;
-      } else if (tankData.valveBDesc) {
-        valveBDesc = tankData.valveBDesc;
-      }
-      
-      console.log('0100 특수 케이스 최종 설명 텍스트:', valveADesc, valveBDesc);
-      
-      // localStorage에 밸브 상태와 함께 설명 저장
-      saveState({
-        ...tankData,
-        valveADesc,
-        valveBDesc
-      });
-      
+      // localStorage에 밸브 상태 저장 (래퍼 함수 사용)
+      saveState(tankData);
       return {
         valve1: 0, // 밸브2 OFF (3way)
         valve2: 1, // 밸브1 ON (2way)
-        valve1Desc: valveADesc,
-        valve2Desc: valveBDesc
+        valve1Desc: tankData.valveADesc || '본탱크 수집',
+        valve2Desc: tankData.valveBDesc || 'ON'
       };
     }
     
@@ -2345,68 +2292,42 @@ export default function TankSystem({
     // 중요: 비동기 함수를 별도로 선언하여 실행
     const loadSavedState = async () => {
       try {
-        console.log('저장된 상태 로드 시도 - mqttClient 상태:', mqttClient ? '존재' : '없음');
-        console.log('onValveChange 함수 상태:', onValveChange ? '존재' : '없음');
-        
-        // 서버 및 로컬 스토리지에서 상태 로드 시도
-        const savedState = await loadInitialState();
-        
-        if (savedState) {
-          console.log('저장된 상태를 복원합니다:', savedState);
+        if (mqttClient) {
+          // 서버 및 로컬 스토리지에서 상태 로드 시도
+          const savedState = await loadInitialState();
           
-          try {
-            // 저장된 상태로 업데이트 로직
-            if (savedState.valveState && onValveChange) {
-              console.log('저장된 밸브 상태 복원 시도:', savedState.valveState);
-              
-              // 저장된 설명 로그 출력
-              console.log('저장된 밸브 설명:', 
-                savedState.valveADesc || '설명 없음', 
-                savedState.valveBDesc || '설명 없음');
-              
-              // 특수 케이스 (0100)일 때 저장된 설명을 보존하기 위한 추가 처리
-              if (savedState.valveState === '0100') {
-                console.log('저장된 상태가 특수 케이스(0100)입니다. 설명 보존 처리 중...');
-                
-                // 저장된 밸브 상태 복원을 위해 onValveChange 호출
+          if (savedState) {
+            console.log('저장된 상태를 복원합니다.');
+            
+            try {
+              // 저장된 상태로 업데이트 로직 (예: onValveChange 호출 등)
+              if (savedState.valveState && onValveChange) {
+                console.log('저장된 밸브 상태 복원 시도:', savedState.valveState);
                 onValveChange(savedState.valveState);
                 
-                // 설명을 유지하기 위해 현재 tankData를 업데이트
-                if (savedState.valveADesc) {
-                  // 다음 렌더링 사이클에서 tankData와 함께 전달될 수 있도록 
-                  // 부모 컴포넌트에게 알리는 코드 (필요한 경우)
-                  console.log('특수 케이스(0100)의 설명 보존:', savedState.valveADesc);
-                }
-              } else {
-                // 일반 케이스 - 저장된 밸브 상태만 복원
-                onValveChange(savedState.valveState);
+                // 디버깅을 위한 추가 로그
+                setTimeout(() => {
+                  console.log('현재 UI에 표시된 밸브 상태:', tankData.valveState);
+                }, 100);
               }
               
-              // 디버깅을 위한 추가 로그
-              setTimeout(() => {
-                console.log('현재 UI에 표시된 밸브 상태:', tankData.valveState);
-              }, 100);
+              // 필요한 경우 상태 업데이트를 MQTT로 브로드캐스트
+              if (mqttClient.connected) {
+                mqttClient.publish('tank-system/state-loaded', JSON.stringify({
+                  clientId: clientId.current,
+                  timestamp: Date.now(),
+                  source: 'localStorage'
+                }));
+              }
+            } catch (updateError) {
+              console.error('상태 복원 중 오류 발생:', updateError);
+              // 오류가 발생해도 컴포넌트 초기화를 계속 진행합니다.
             }
-            
-            // 필요한 경우 상태 업데이트를 MQTT로 브로드캐스트
-            if (mqttClient?.connected) {
-              mqttClient.publish('tank-system/state-loaded', JSON.stringify({
-                clientId: clientId.current,
-                timestamp: Date.now(),
-                source: 'localStorage',
-                valveState: savedState.valveState,
-                descriptions: {
-                  valveADesc: savedState.valveADesc,
-                  valveBDesc: savedState.valveBDesc
-                }
-              }));
-            }
-          } catch (updateError) {
-            console.error('상태 복원 중 오류 발생:', updateError);
           }
         }
       } catch (error) {
         console.error('상태 로드 중 예상치 못한 오류:', error);
+        // 오류가 발생해도 앱이 계속 실행되도록 합니다.
       }
     };
     
@@ -2414,7 +2335,7 @@ export default function TankSystem({
     loadSavedState().catch(error => {
       console.error('상태 로드 프로세스 전체 실패:', error);
     });
-  }, [mqttClient, onValveChange, tankData]); // tankData도 의존성 배열에 추가
+  }, []); // 빈 의존성 배열로 설정
 
   const [mainTankLevelMessage, setMainTankLevelMessage] = useState<string>("");
   const [tankMessages, setTankMessages] = useState<Record<number, string>>({});

@@ -1,11 +1,10 @@
-"use client"
-import { motion } from "framer-motion"
-import { useEffect, useState, useRef, useCallback } from "react"
-import { MqttClient } from "mqtt"
-import { cn } from '@/lib/utils';
-import "./tank-system.css"; // 새로 생성한 CSS 파일 import
-import { PROCESS_PROGRESS_TOPIC, AUTOMATION_STATUS_TOPIC } from "@/lib/mqtt-topics"; // MQTT 토픽 import
-import { Tank } from '@/interface/tank'; // Tank 인터페이스만 임포트
+import { 
+  PROCESS_PROGRESS_TOPIC, 
+  AUTOMATION_STATUS_TOPIC,
+  VALVE_STATE_SYNC_TOPIC,
+  VALVE_STATE_REQUEST_TOPIC,
+  VALVE_STATE_RESPONSE_TOPIC
+} from "@/lib/mqtt-topics"; // MQTT 토픽 import
 
 // 고유 클라이언트 ID 생성 함수
 const generateClientId = () => {
@@ -18,39 +17,16 @@ const saveState = async (stateToSave: any) => {
   try {
     // 로컬 스토리지에 상태 저장
     if (typeof window !== 'undefined') {
-      // 상태에 설명이 없으면 기본값 추가 (본탱크수집 방지)
-      const stateWithDesc = { ...stateToSave };
-      
-      // 밸브 상태에 따라 적절한 설명 설정 (기본값 전체순환/추출순환)
-      if (stateWithDesc.valveState === '0100') {
-        if (!stateWithDesc.valveADesc) {
-          stateWithDesc.valveADesc = '전체순환'; // '본탱크수집' 대신 '전체순환' 사용
-        }
-        if (!stateWithDesc.valveBDesc) {
-          stateWithDesc.valveBDesc = 'ON';
-        }
-      } else if (stateWithDesc.valveState && stateWithDesc.valveState.length >= 2) {
-        const v1 = parseInt(stateWithDesc.valveState[0]) || 0;
-        const v2 = parseInt(stateWithDesc.valveState[1]) || 0;
-        
-        if (!stateWithDesc.valveADesc) {
-          stateWithDesc.valveADesc = v1 === 1 ? '추출순환' : '전체순환';
-        }
-        if (!stateWithDesc.valveBDesc) {
-          stateWithDesc.valveBDesc = v2 === 1 ? 'ON' : 'OFF';
-        }
-      }
-      
       // 전체 상태를 로컬 스토리지에 저장
-      const stateString = JSON.stringify(stateWithDesc);
-      localStorage.setItem('tankSystemState', stateString);
-      console.log('개선된 밸브 상태 저장:', stateWithDesc.valveState, 
-        '설명:', stateWithDesc.valveADesc, stateWithDesc.valveBDesc);
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
       
       // IndexedDB에도 저장
       if (typeof saveToIndexedDB === 'function') {
         // extractionCommand 필드를 제외한 복사본 생성
-        const stateForStorage = {...stateWithDesc};
+        const stateForStorage = {...stateToSave};
         
         // 서버와 충돌할 수 있는 필드 제거
         if (stateForStorage.extractionCommand) {
@@ -339,11 +315,11 @@ export default function TankSystem({
   pumpMessages,
   setProgressMessages
 }: TankSystemProps) {
-  // 고유 클라이언트 ID 생성 함수
-  const generateClientId = () => {
-    if (typeof window === 'undefined') return 'server';
-    return `client_${Math.random().toString(36).substring(2, 15)}`;
-  };
+  // 고유 클라이언트 ID 생성
+  const clientId = useRef<string>(generateClientId());
+  
+  // 마지막 밸브 상태 업데이트 타임스탬프를 추적하는 ref
+  const lastValveUpdateTimestamp = useRef<number>(Date.now());
 
   // MQTT 토픽에서 진행 정보 파싱을 위한 인터페이스 추가
   interface ProcessProgress {
@@ -602,6 +578,743 @@ export default function TankSystem({
       
       // 추출 명령 입력 토픽 구독 추가
       mqttClient.subscribe('extwork/extraction/input');
+      
+      // 밸브 상태 동기화 관련 토픽 구독 추가
+      mqttClient.subscribe(VALVE_STATE_SYNC_TOPIC);
+      mqttClient.subscribe(VALVE_STATE_REQUEST_TOPIC);
+      mqttClient.subscribe(VALVE_STATE_RESPONSE_TOPIC);
+      
+      // STATUS 요청 제거 - Redis에서 상태를 가져오도록 변경
+      // 밸브, 펌프 상태는 MQTT 메시지를 통해 업데이트
+      console.log('Redis를 통해 시스템 상태를 관리합니다.');
+    };
+    
+    // MQTT 클라이언트 연결 시 구독 설정
+    mqttClient.on('connect', () => {
+      console.log('MQTT 연결됨, 탱크 토픽 구독');
+      setConnectionStatus({
+        connected: true,
+        lastConnected: new Date(),
+        reconnecting: false
+      });
+      
+      subscribeTankTopics();
+    });
+    
+    // 연결 끊김 처리
+    mqttClient.on('disconnect', () => {
+      console.log('MQTT 연결 끊김');
+      setConnectionStatus(prev => ({
+        ...prev,
+        connected: false
+      }));
+    });
+    
+    // 이미 연결되어 있는 경우 구독 실행
+    if (mqttClient.connected) {
+      subscribeTankTopics();
+    }
+    
+    // 연결 이벤트 리스너 등록
+    mqttClient.on('connect', subscribeTankTopics);
+    
+    const handleMessage = (topic: string, message: Buffer) => {
+      const messageStr = message.toString();
+      console.log(`MQTT 메시지 수신: ${topic} - ${messageStr}`);
+      
+      try {
+        // 밸브 상태 동기화 메시지 처리
+        if (topic === VALVE_STATE_SYNC_TOPIC) {
+          try {
+            const syncData = JSON.parse(messageStr);
+            
+            // 자신이 보낸 메시지는 무시 (중복 처리 방지)
+            if (syncData.clientId === clientId.current) {
+              console.log('자신이 보낸 밸브 상태 동기화 메시지, 무시합니다.');
+              return;
+            }
+            
+            // 현재 타임스탬프 값보다 이전(오래된) 메시지일 경우 무시
+            if (syncData.timestamp <= lastValveUpdateTimestamp.current) {
+              console.log('이전 밸브 상태 동기화 메시지, 무시합니다:', 
+                         `수신 타임스탬프(${syncData.timestamp}) <= 로컬(${lastValveUpdateTimestamp.current})`);
+              return;
+            }
+            
+            console.log('다른 클라이언트에서 온 밸브 상태 동기화:', syncData);
+            
+            // 밸브 상태가 있으면 UI 업데이트
+            if (syncData.valveState && onValveChange) {
+              console.log('다른 클라이언트의 밸브 상태로 업데이트:', syncData.valveState);
+              onValveChange(syncData.valveState);
+              
+              // 타임스탬프 업데이트
+              lastValveUpdateTimestamp.current = syncData.timestamp;
+              
+              // 알림 추가
+              addNotification(`다른 클라이언트(${syncData.clientId})에서 밸브 상태가 업데이트되었습니다.`, 'info');
+            }
+          } catch (error) {
+            console.error('밸브 상태 동기화 메시지 처리 오류:', error);
+          }
+          return;
+        }
+        
+        // 밸브 상태 요청 메시지 처리
+        else if (topic === VALVE_STATE_REQUEST_TOPIC) {
+          try {
+            const requestData = JSON.parse(messageStr);
+            
+            // 자신이 보낸 요청은 무시
+            if (requestData.clientId === clientId.current) {
+              console.log('자신이 보낸 밸브 상태 요청, 무시합니다.');
+              return;
+            }
+            
+            // 현재 밸브 상태 응답
+            if (tankData && tankData.valveState) {
+              const responsePayload = JSON.stringify({
+                clientId: clientId.current,
+                timestamp: Date.now(),
+                valveState: tankData.valveState,
+                valveADesc: tankData.valveADesc,
+                valveBDesc: tankData.valveBDesc
+              });
+              
+              // 응답 토픽에 발행
+              mqttClient.publish(VALVE_STATE_RESPONSE_TOPIC, responsePayload);
+              console.log('밸브 상태 요청에 응답 발행:', responsePayload);
+            }
+          } catch (error) {
+            console.error('밸브 상태 요청 메시지 처리 오류:', error);
+          }
+          return;
+        }
+        
+        // 밸브 상태 응답 메시지 처리
+        else if (topic === VALVE_STATE_RESPONSE_TOPIC) {
+          try {
+            const responseData = JSON.parse(messageStr);
+            
+            // 자신이 보낸 응답은 무시
+            if (responseData.clientId === clientId.current) {
+              console.log('자신이 보낸 밸브 상태 응답, 무시합니다.');
+              return;
+            }
+            
+            // 현재 타임스탬프 값보다 이전(오래된) 메시지일 경우 무시
+            if (responseData.timestamp <= lastValveUpdateTimestamp.current) {
+              console.log('이전 밸브 상태 응답 메시지, 무시합니다:', 
+                        `수신 타임스탬프(${responseData.timestamp}) <= 로컬(${lastValveUpdateTimestamp.current})`);
+              return;
+            }
+            
+            console.log('다른 클라이언트의 밸브 상태 응답:', responseData);
+            
+            // 밸브 상태가 있으면 UI 업데이트
+            if (responseData.valveState && onValveChange) {
+              console.log('응답으로 받은 밸브 상태로 업데이트:', responseData.valveState);
+              onValveChange(responseData.valveState);
+              
+              // 타임스탬프 업데이트
+              lastValveUpdateTimestamp.current = responseData.timestamp;
+            }
+          } catch (error) {
+            console.error('밸브 상태 응답 메시지 처리 오류:', error);
+          }
+          return;
+        }
+        
+        // extwork/extraction/input 토픽 처리 추가
+        else if (topic === 'extwork/extraction/input') {
+          console.log(`추출 입력 명령 수신: ${messageStr}`);
+          
+          try {
+import { 
+  PROCESS_PROGRESS_TOPIC, 
+  AUTOMATION_STATUS_TOPIC,
+  VALVE_STATE_SYNC_TOPIC,
+  VALVE_STATE_REQUEST_TOPIC,
+  VALVE_STATE_RESPONSE_TOPIC
+} from "@/lib/mqtt-topics"; // MQTT 토픽 import
+
+// 고유 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  if (typeof window === 'undefined') return 'server';
+  return `client_${Math.random().toString(36).substring(2, 15)}`;
+};
+
+// 시스템 상태 저장 및 불러오기 함수 개선
+const saveState = async (stateToSave: any) => {
+  try {
+    // 로컬 스토리지에 상태 저장
+    if (typeof window !== 'undefined') {
+      // 전체 상태를 로컬 스토리지에 저장
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
+      
+      // IndexedDB에도 저장
+      if (typeof saveToIndexedDB === 'function') {
+        // extractionCommand 필드를 제외한 복사본 생성
+        const stateForStorage = {...stateToSave};
+        
+        // 서버와 충돌할 수 있는 필드 제거
+        if (stateForStorage.extractionCommand) {
+          delete stateForStorage.extractionCommand;
+        }
+        
+        saveToIndexedDB(stateForStorage);
+      }
+      
+      // 다른 탭/창에 상태 변경 알림
+      localStorage.setItem('tankSystemStateUpdate', Date.now().toString());
+    }
+  } catch (error) {
+    console.error('상태 저장 실패:', error);
+  }
+};
+
+// IndexedDB에 상태 저장
+const saveToIndexedDB = (state: any) => {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    console.warn('IndexedDB를 사용할 수 없습니다.');
+    return;
+  }
+  
+  try {
+    const request = window.indexedDB.open('TankSystemDB', 1);
+    
+    request.onupgradeneeded = function(event) {
+      try {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('systemState')) {
+          db.createObjectStore('systemState', { keyPath: 'id' });
+        }
+      } catch (error) {
+        console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+        // 오류가 발생해도 계속 진행
+      }
+    };
+    
+    request.onsuccess = function(event) {
+      try {
+        const db = request.result;
+        const transaction = db.transaction(['systemState'], 'readwrite');
+        const store = transaction.objectStore('systemState');
+        
+        // 항상 같은 키로 저장하여 최신 상태만 유지
+        const putRequest = store.put({
+          id: 'currentState',
+          data: state,
+          timestamp: Date.now()
+        });
+        
+        putRequest.onsuccess = function() {
+          console.log('IndexedDB에 상태 저장 성공');
+        };
+        
+        putRequest.onerror = function(event) {
+          console.warn('IndexedDB 데이터 저장 중 오류:', event);
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+        
+        transaction.onerror = function(event) {
+          console.warn('IndexedDB 트랜잭션 오류:', event);
+        };
+      } catch (error) {
+        console.error('IndexedDB 트랜잭션 생성 중 오류:', error);
+      }
+    };
+    
+    request.onerror = function(event) {
+      console.warn('IndexedDB 열기 오류:', event);
+    };
+  } catch (error) {
+    console.error('IndexedDB 접근 중 예상치 못한 오류:', error);
+  }
+};
+
+// 상태 불러오기 함수 개선
+const loadState = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storedState = localStorage.getItem('tankSystemState');
+      
+      if (storedState && storedState !== 'undefined') {
+        return JSON.parse(storedState);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('상태 불러오기 실패:', error);
+      return null;
+    }
+  }
+  
+  return null;
+};
+
+// 서버에서 초기 상태 불러오기
+const loadInitialState = async (): Promise<any> => {
+  if (typeof window !== 'undefined') {
+    try {
+      // 서버 API에서 상태 가져오기
+      if (window.navigator.onLine) {
+        try {
+          console.log('서버에서 최신 상태 불러오기 시도...');
+          console.log('API 호출 대신 로컬 스토리지만 사용합니다.');
+        } catch (serverError) {
+          console.error('서버에서 상태 불러오기 실패:', serverError);
+          // 서버 오류 시 계속 진행 - 로컬 저장소 사용
+        }
+      }
+      
+      // 서버에서 불러오기 실패 시 로컬 스토리지에서 불러오기 시도
+      try {
+        const localState = loadState();
+        if (localState) {
+          console.log('로컬 스토리지에서 상태를 불러왔습니다.');
+          return localState;
+        }
+      } catch (localError) {
+        console.error('로컬 스토리지에서 상태 불러오기 실패:', localError);
+        // 로컬 스토리지 오류 시 계속 진행 - IndexedDB 사용
+      }
+      
+      // IndexedDB에서 불러오기 시도
+      try {
+        const idbState = await loadFromIndexedDB();
+        if (idbState) {
+          console.log('IndexedDB에서 상태를 불러왔습니다.');
+          return idbState;
+        }
+      } catch (idbError) {
+        console.error('IndexedDB에서 상태 불러오기 실패:', idbError);
+        // IndexedDB 오류 시 기본값 사용
+      }
+    } catch (error) {
+      console.error('초기 상태 불러오기 전체 프로세스 실패:', error);
+      // 모든 오류 시 기본값 사용
+    }
+  }
+  
+  console.log('사용 가능한 저장된 상태가 없습니다. 기본값 사용.');
+  return null;
+};
+
+// IndexedDB에서 상태 불러오기 (Promise 반환)
+const loadFromIndexedDB = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      console.warn('IndexedDB를 사용할 수 없습니다.');
+      resolve(null);
+      return;
+    }
+    
+    try {
+      const request = window.indexedDB.open('TankSystemDB', 1);
+      
+      request.onupgradeneeded = function(event) {
+        try {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('systemState')) {
+            db.createObjectStore('systemState', { keyPath: 'id' });
+          }
+        } catch (error) {
+          console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+          // 업그레이드 오류가 발생해도 계속 진행 가능하도록 함
+        }
+      };
+      
+      request.onsuccess = function(event) {
+        try {
+          const db = request.result;
+          const transaction = db.transaction(['systemState'], 'readonly');
+          const store = transaction.objectStore('systemState');
+          const getRequest = store.get('currentState');
+          
+          getRequest.onsuccess = function() {
+            if (getRequest.result) {
+              resolve(getRequest.result.data);
+            } else {
+              console.log('IndexedDB에 저장된 상태가 없습니다.');
+              resolve(null);
+            }
+          };
+          
+          getRequest.onerror = function(event) {
+            console.warn('IndexedDB 읽기 오류:', event);
+            resolve(null); // 오류 발생 시에도 null을 반환하여 앱이 계속 실행되도록 함
+          };
+          
+          transaction.oncomplete = function() {
+            db.close();
+          };
+          } catch (error) {
+          console.error('IndexedDB 트랜잭션 중 오류:', error);
+          resolve(null);
+        }
+      };
+      
+      request.onerror = function(event) {
+        console.warn('IndexedDB 접근 오류:', event);
+        resolve(null); // reject 대신 resolve(null)을 사용하여 앱이 계속 실행되도록 함
+      };
+    } catch (error) {
+      console.error('IndexedDB 사용 중 예상치 못한 오류:', error);
+      resolve(null); // 모든 예외 상황에서도 앱이 계속 실행되도록 함
+    }
+  });
+};
+
+interface TankSystemProps {
+  tankData: {
+    mainTank: {
+      level: number
+      status: string
+    }
+    tanks: Tank[]
+    valveState: string
+    valveStatusMessage?: string
+    valveADesc?: string  // 밸브 A 설명 추가
+    valveBDesc?: string  // 밸브 B 설명 추가
+    tankMessages?: Record<number, string>
+    mainTankMessage?: string
+    progressInfo?: {
+      step: string
+      elapsedTime: string
+      remainingTime: string
+      totalRemainingTime: string
+    }
+  }
+  onValveChange: (newState: string) => void
+  onPumpToggle?: (pumpId: number) => void  // 펌프 토글 함수
+  onPumpReset?: (pumpId: number) => void   // 펌프 리셋 함수
+  onPumpKCommand?: (pumpId: number) => void // 펌프 K 명령 함수
+  // onExtractionCommand 속성 제거됨
+  pumpStateMessages?: Record<number, string> // 펌프 상태 메시지
+  mqttClient?: MqttClient // MQTT 클라이언트 추가
+  kButtonActive?: boolean // K 버튼 활성화 여부
+  pumpMessages?: Record<number, string> // 펌프 메시지
+  progressMessages?: Array<{timestamp: number, message: string, rawJson?: string | null}> // 진행 메시지 추가
+  setProgressMessages?: (messages: Array<{timestamp: number, message: string, rawJson?: string | null}> | ((prev: Array<{timestamp: number, message: string, rawJson?: string | null}>) => Array<{timestamp: number, message: string, rawJson?: string | null}>)) => void // 진행 메시지 업데이트 함수 추가
+}
+
+// 추출 진행 메시지를 위한 인터페이스
+interface ExtractionProgress {
+  timestamp: number
+  message: string
+}
+
+// 연결 상태를 위한 인터페이스
+interface ConnectionStatus {
+  connected: boolean
+  lastConnected: Date | null
+  reconnecting: boolean
+}
+
+// 펄스 애니메이션을 위한 스타일 추가
+const pulseCss = `
+  @keyframes pulse {
+    0% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0.6;
+    }
+  }
+`;
+
+export default function TankSystem({ 
+  tankData, 
+  onValveChange, 
+  progressMessages = [], 
+  onPumpToggle, 
+  onPumpReset,
+  onPumpKCommand,
+  pumpStateMessages = {},
+  mqttClient,
+  // onExtractionCommand 속성 제거됨
+  kButtonActive,
+  pumpMessages,
+  setProgressMessages
+}: TankSystemProps) {
+  // 고유 클라이언트 ID 생성
+  const clientId = useRef<string>(generateClientId());
+  
+  // 마지막 밸브 상태 업데이트 타임스탬프를 추적하는 ref
+  const lastValveUpdateTimestamp = useRef<number>(Date.now());
+
+  // MQTT 토픽에서 진행 정보 파싱을 위한 인터페이스 추가
+  interface ProcessProgress {
+    mode: string;             // 작동 모드 (동시모드, 순차모드, 오버랩모드)
+    elapsed_time: number;     // 경과 시간 (초)
+    remaining_time: number;   // 남은 시간 (초)
+    total_repeats: number;    // 총 반복 횟수 
+    current_repeat: number;   // 현재 반복 횟수
+    pump_id?: string;         // 펌프 ID (순차모드, 오버랩모드에서 사용)
+  }
+
+  // 진행 상태 정보 저장 (펌프 ID별)
+  const [pumpProgressInfo, setPumpProgressInfo] = useState<Record<number, ProcessProgress>>({});
+
+  // 진행 정보 메시지 파싱 함수 - extwork/extraction/progress 토픽용
+  const parseProgressMessage = (messageStr: string): ProcessProgress | null => {
+    try {
+      // JSON 파싱 시도
+      if (messageStr.startsWith('{') && messageStr.endsWith('}')) {
+        const progressData = JSON.parse(messageStr);
+        
+        // 기본 필드 확인
+        if (progressData.elapsed_time && progressData.remaining_time) {
+          // 경과 시간과 남은 시간을 초 단위로 파싱
+          const elapsedStr = progressData.elapsed_time.replace('s', '');
+          const remainingStr = progressData.remaining_time.replace('s', '');
+          const elapsed = parseInt(elapsedStr, 10);
+          const remaining = parseInt(remainingStr, 10);
+          
+          // 기본 프로그레스 정보 객체
+          const progress: ProcessProgress = {
+            mode: '',
+            elapsed_time: elapsed,
+            remaining_time: remaining,
+            total_repeats: 1,
+            current_repeat: 0,
+            pump_id: undefined
+          };
+          
+          // 모드 정보 파싱
+          if (progressData.mode) {
+            progress.mode = progressData.mode;
+          } else if (messageStr.includes('동시모드')) {
+            progress.mode = '동시모드';
+          } else if (messageStr.includes('순차모드')) {
+            progress.mode = '순차모드';
+          } else if (messageStr.includes('오버랩모드')) {
+            progress.mode = '오버랩모드';
+          }
+          
+          // 반복 횟수 정보 파싱 - 동시모드
+          if (progress.mode === '동시모드' && progressData.process_info) {
+            const processMatch = progressData.process_info.match(/S\((\d+)\/(\d+)\)/);
+            if (processMatch) {
+              progress.current_repeat = parseInt(processMatch[1], 10);
+              progress.total_repeats = parseInt(processMatch[2], 10) || 1; // 0이면 1로 처리
+            }
+          }
+          
+          // 펌프 ID 및 반복 횟수 파싱 - 순차모드 & 오버랩모드
+          if ((progress.mode === '순차모드' || progress.mode === '오버랩모드') && progressData.pump_id) {
+            // 정확한 패턴 매칭: "1(0/9)" 형식
+            const pumpMatch = progressData.pump_id.match(/(\d+)\((\d+)\/(\d+)\)/);
+            if (pumpMatch) {
+              progress.pump_id = pumpMatch[1]; // 펌프 ID (예: "1")
+              
+              // 순차 모드 개선: 정확한 현재 반복 횟수와 총 반복 횟수 계산
+              progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수 (예: 0)
+              
+              // 총 반복 횟수 처리 - 0부터 시작하므로 +1
+              const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+              progress.total_repeats = totalRepeats || 1; // 총 반복 횟수가 0이면 1로 설정
+              
+              console.log(`펌프 ${progress.pump_id} 진행 정보 파싱: 현재 ${progress.current_repeat+1}/${progress.total_repeats} 회 (${((progress.current_repeat/progress.total_repeats)*100).toFixed(1)}% 진행)`);
+            }
+          }
+          
+          return progress;
+        }
+      }
+      
+      // 텍스트 형식으로 된 메시지 파싱 시도 (비 JSON 형식)
+      const elapsedMatch = messageStr.match(/경과:\s*(\d+)s/) || messageStr.match(/elapsed_time":\s*"(\d+)s/);
+      const remainingMatch = messageStr.match(/남은:\s*(\d+)s/) || messageStr.match(/remaining_time":\s*"(\d+)s/);
+      
+      if (elapsedMatch && remainingMatch) {
+        const elapsed = parseInt(elapsedMatch[1], 10);
+        const remaining = parseInt(remainingMatch[1], 10);
+        
+        // 기본 프로그레스 정보 객체
+        const progress: ProcessProgress = {
+          mode: '',
+          elapsed_time: elapsed,
+          remaining_time: remaining,
+          total_repeats: 1,
+          current_repeat: 0,
+          pump_id: undefined
+        };
+        
+        // 모드 정보 파싱
+        if (messageStr.includes('동시모드')) {
+          progress.mode = '동시모드';
+          // 동시모드 반복 횟수 정보 파싱
+          const processMatch = messageStr.match(/S\((\d+)\/(\d+)\)/);
+          if (processMatch) {
+            progress.current_repeat = parseInt(processMatch[1], 10);
+            progress.total_repeats = parseInt(processMatch[2], 10) || 1; // 0이면 1로 처리
+          }
+        } else if (messageStr.includes('순차모드')) {
+          progress.mode = '순차모드';
+          
+          // 순차모드 펌프 ID 및 반복 횟수 파싱 - 개선된 정규식
+          const pumpMatch = messageStr.match(/펌프\s*(\d+)\s*\((\d+)\/(\d+)\)/) || 
+                            messageStr.match(/(\d+)\((\d+)\/(\d+)\)/);
+          
+          if (pumpMatch) {
+            progress.pump_id = pumpMatch[1]; // 펌프 ID
+            progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수
+            
+            // 총 반복 횟수 처리 - 0이면 1로 설정 (100% 채워짐)
+            const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+            progress.total_repeats = totalRepeats || 1;
+            
+            console.log(`[텍스트] 펌프 ${progress.pump_id} 순차모드 진행 정보: ${progress.current_repeat+1}/${progress.total_repeats} 회`);
+          }
+        } else if (messageStr.includes('오버랩모드')) {
+          progress.mode = '오버랩모드';
+          
+          // 오버랩모드 펌프 ID 및 반복 횟수 파싱 - 개선된 정규식
+          const pumpMatch = messageStr.match(/펌프\s*(\d+)\s*\((\d+)\/(\d+)\)/) || 
+                            messageStr.match(/(\d+)\((\d+)\/(\d+)\)/);
+                          
+          if (pumpMatch) {
+            progress.pump_id = pumpMatch[1]; // 펌프 ID
+            progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수
+            
+            // 총 반복 횟수 처리 - 0이면 1로 설정 (100% 채워짐)
+            const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+            progress.total_repeats = totalRepeats || 1;
+            
+            console.log(`[텍스트] 펌프 ${progress.pump_id} 오버랩모드 진행 정보: ${progress.current_repeat+1}/${progress.total_repeats} 회`);
+          }
+        }
+        
+        return progress;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('진행 정보 파싱 오류:', error);
+      return null;
+    }
+  };
+
+  // 애니메이션을 위한 상태 추가
+  const [fillPercentage, setFillPercentage] = useState(0);
+  
+  // 길게 누르기 감지를 위한 타이머 상태 추가
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [currentPressedPump, setCurrentPressedPump] = useState<number | null>(null);
+  
+  // 클라이언트 ID 상태 추가
+  const clientId = useRef(generateClientId());
+  
+  // 마지막 상태 업데이트 시간
+  const [lastStateUpdate, setLastStateUpdate] = useState<Date | null>(null);
+  
+  // 연결 상태 추가
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
+    connected: false,
+    lastConnected: null,
+    reconnecting: false
+  });
+  
+  // 상태 변경 알림을 위한 상태 업데이트
+  const [notifications, setNotifications] = useState<Array<{
+    message: string,
+    timestamp: number,
+    source?: string,
+    type?: 'info' | 'warning' | 'error', // 알림 유형 추가
+    pumpId?: number // 펌프 ID 추가
+  }>>([]);
+
+  // 알림 추가 함수 
+  const addNotification = (message: string, type: 'info' | 'warning' | 'error' = 'info', pumpId?: number) => {
+    const notification = {
+      message,
+      timestamp: Date.now(),
+      type,
+      pumpId,
+      source: '시스템'
+    };
+    
+    // 알림 목록에 추가
+    setNotifications(prev => [...prev, notification]);
+    
+    // 15초 후 알림 자동 제거
+    setTimeout(() => {
+      setNotifications(prev => 
+        prev.filter(n => n.timestamp !== notification.timestamp)
+      );
+    }, 15000);
+    
+    // MQTT를 통해 알림 공유 (다른 클라이언트에게도 알림)
+    if (mqttClient) {
+      mqttClient.publish('tank-system/notifications', JSON.stringify({
+        ...notification,
+        clientId: clientId.current
+      }));
+    }
+  };
+
+  // 펌프 스위치 드래그 상태
+  const [pumpSwitchPosition, setPumpSwitchPosition] = useState<Record<number, number>>({
+    1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 // 모든 펌프에 대한 초기 스위치 위치 설정
+  });
+  const [draggingPump, setDraggingPump] = useState<number | null>(null);
+  const [resetTimers, setResetTimers] = useState<Record<number, NodeJS.Timeout | null>>({});
+  const [resetSwitchPosition, setResetSwitchPosition] = useState<Record<number, number>>({});
+  // 펌프 리셋 드래그 상태 추가
+  const [resetDragState, setResetDragState] = useState<Record<number, { dragging: boolean, position: number, timer: NodeJS.Timeout | null }>>({});
+  
+  // MQTT 클라이언트 연결 상태 모니터링
+  useEffect(() => {
+    if (!mqttClient) return;
+    
+    const subscribeTankTopics = () => {
+      console.log('탱크 토픽 구독 중...');
+      
+      // 필요한 토픽 구독
+      for (let i = 1; i <= 6; i++) {
+        // 탱크 수위 토픽 구독
+        mqttClient.subscribe(`extwork/inverter${i}/tank${i}_level`);
+        
+        // 2번 탱크 수위 문제 해결: 모든 탱크-인버터 조합 구독
+        for (let j = 1; j <= 6; j++) {
+          if (i !== j) { // 위에서 이미 구독한 동일 번호 조합은 제외
+            mqttClient.subscribe(`extwork/inverter${i}/tank${j}_level`);
+            console.log(`추가 구독: extwork/inverter${i}/tank${j}_level`);
+          }
+        }
+        
+        // 인버터 상태 토픽 구독 (펌프 상태)
+        mqttClient.subscribe(`extwork/inverter${i}/state`);
+        
+        // 인버터 연결 상태 토픽 구독
+        mqttClient.subscribe(`extwork/inverter${i}/overallstate`);
+      }
+      
+      // 본탱크 수위 토픽 구독
+      mqttClient.subscribe('extwork/tank/level');
+      
+      // 자동화 공정 관련 토픽 구독
+      mqttClient.subscribe(AUTOMATION_STATUS_TOPIC);
+      mqttClient.subscribe(PROCESS_PROGRESS_TOPIC);
+      
+      // 추출 명령 입력 토픽 구독 추가
+      mqttClient.subscribe('extwork/extraction/input');
+      
+      // 밸브 상태 동기화 관련 토픽 구독 추가
+      mqttClient.subscribe(VALVE_STATE_SYNC_TOPIC);
+      mqttClient.subscribe(VALVE_STATE_REQUEST_TOPIC);
+      mqttClient.subscribe(VALVE_STATE_RESPONSE_TOPIC);
       
       // STATUS 요청 제거 - Redis에서 상태를 가져오도록 변경
       // 밸브, 펌프 상태는 MQTT 메시지를 통해 업데이트
@@ -1743,43 +2456,13 @@ export default function TankSystem({
     // 특수 케이스: 0100 (밸브2 OFF, 밸브1 ON)
     if (tankData.valveState === '0100') {
       console.log('특수 케이스 감지: 0100 - 밸브2 OFF, 밸브1 ON');
-      
-      // 저장된 상태에서 설명 불러오기 시도
-      const savedState = loadState();
-      
-      // 고정된 '본탱크수집' 지정을 피하고 저장된 값 또는 일반 값 사용
-      let valveADesc = '전체순환'; // 기본값 '전체순환'으로 설정
-      let valveBDesc = 'ON';       // 기본값 'ON'으로 설정
-      
-      // 저장된 상태에서 설명 가져오기 시도
-      if (savedState?.valveADesc) {
-        valveADesc = savedState.valveADesc;
-        console.log('0100 케이스: 저장된 valveADesc 사용:', valveADesc);
-      } else if (tankData.valveADesc) {
-        valveADesc = tankData.valveADesc;
-        console.log('0100 케이스: 현재 tankData.valveADesc 사용:', valveADesc);
-      }
-      
-      if (savedState?.valveBDesc) {
-        valveBDesc = savedState.valveBDesc;
-      } else if (tankData.valveBDesc) {
-        valveBDesc = tankData.valveBDesc;
-      }
-      
-      console.log('0100 특수 케이스 최종 설명 텍스트:', valveADesc, valveBDesc);
-      
-      // localStorage에 밸브 상태와 함께 설명 저장
-      saveState({
-        ...tankData,
-        valveADesc,
-        valveBDesc
-      });
-      
+      // localStorage에 밸브 상태 저장 (래퍼 함수 사용)
+      saveState(tankData);
       return {
         valve1: 0, // 밸브2 OFF (3way)
         valve2: 1, // 밸브1 ON (2way)
-        valve1Desc: valveADesc,
-        valve2Desc: valveBDesc
+        valve1Desc: tankData.valveADesc || '본탱크 수집',
+        valve2Desc: tankData.valveBDesc || 'ON'
       };
     }
     
@@ -2345,68 +3028,42 @@ export default function TankSystem({
     // 중요: 비동기 함수를 별도로 선언하여 실행
     const loadSavedState = async () => {
       try {
-        console.log('저장된 상태 로드 시도 - mqttClient 상태:', mqttClient ? '존재' : '없음');
-        console.log('onValveChange 함수 상태:', onValveChange ? '존재' : '없음');
-        
-        // 서버 및 로컬 스토리지에서 상태 로드 시도
-        const savedState = await loadInitialState();
-        
-        if (savedState) {
-          console.log('저장된 상태를 복원합니다:', savedState);
+        if (mqttClient) {
+          // 서버 및 로컬 스토리지에서 상태 로드 시도
+          const savedState = await loadInitialState();
           
-          try {
-            // 저장된 상태로 업데이트 로직
-            if (savedState.valveState && onValveChange) {
-              console.log('저장된 밸브 상태 복원 시도:', savedState.valveState);
-              
-              // 저장된 설명 로그 출력
-              console.log('저장된 밸브 설명:', 
-                savedState.valveADesc || '설명 없음', 
-                savedState.valveBDesc || '설명 없음');
-              
-              // 특수 케이스 (0100)일 때 저장된 설명을 보존하기 위한 추가 처리
-              if (savedState.valveState === '0100') {
-                console.log('저장된 상태가 특수 케이스(0100)입니다. 설명 보존 처리 중...');
-                
-                // 저장된 밸브 상태 복원을 위해 onValveChange 호출
+          if (savedState) {
+            console.log('저장된 상태를 복원합니다.');
+            
+            try {
+              // 저장된 상태로 업데이트 로직 (예: onValveChange 호출 등)
+              if (savedState.valveState && onValveChange) {
+                console.log('저장된 밸브 상태 복원 시도:', savedState.valveState);
                 onValveChange(savedState.valveState);
                 
-                // 설명을 유지하기 위해 현재 tankData를 업데이트
-                if (savedState.valveADesc) {
-                  // 다음 렌더링 사이클에서 tankData와 함께 전달될 수 있도록 
-                  // 부모 컴포넌트에게 알리는 코드 (필요한 경우)
-                  console.log('특수 케이스(0100)의 설명 보존:', savedState.valveADesc);
-                }
-              } else {
-                // 일반 케이스 - 저장된 밸브 상태만 복원
-                onValveChange(savedState.valveState);
+                // 디버깅을 위한 추가 로그
+                setTimeout(() => {
+                  console.log('현재 UI에 표시된 밸브 상태:', tankData.valveState);
+                }, 100);
               }
               
-              // 디버깅을 위한 추가 로그
-              setTimeout(() => {
-                console.log('현재 UI에 표시된 밸브 상태:', tankData.valveState);
-              }, 100);
+              // 필요한 경우 상태 업데이트를 MQTT로 브로드캐스트
+              if (mqttClient.connected) {
+                mqttClient.publish('tank-system/state-loaded', JSON.stringify({
+                  clientId: clientId.current,
+                  timestamp: Date.now(),
+                  source: 'localStorage'
+                }));
+              }
+            } catch (updateError) {
+              console.error('상태 복원 중 오류 발생:', updateError);
+              // 오류가 발생해도 컴포넌트 초기화를 계속 진행합니다.
             }
-            
-            // 필요한 경우 상태 업데이트를 MQTT로 브로드캐스트
-            if (mqttClient?.connected) {
-              mqttClient.publish('tank-system/state-loaded', JSON.stringify({
-                clientId: clientId.current,
-                timestamp: Date.now(),
-                source: 'localStorage',
-                valveState: savedState.valveState,
-                descriptions: {
-                  valveADesc: savedState.valveADesc,
-                  valveBDesc: savedState.valveBDesc
-                }
-              }));
-            }
-          } catch (updateError) {
-            console.error('상태 복원 중 오류 발생:', updateError);
           }
         }
       } catch (error) {
         console.error('상태 로드 중 예상치 못한 오류:', error);
+        // 오류가 발생해도 앱이 계속 실행되도록 합니다.
       }
     };
     
@@ -2414,7 +3071,7 @@ export default function TankSystem({
     loadSavedState().catch(error => {
       console.error('상태 로드 프로세스 전체 실패:', error);
     });
-  }, [mqttClient, onValveChange, tankData]); // tankData도 의존성 배열에 추가
+  }, []); // 빈 의존성 배열로 설정
 
   const [mainTankLevelMessage, setMainTankLevelMessage] = useState<string>("");
   const [tankMessages, setTankMessages] = useState<Record<number, string>>({});
@@ -3532,6 +4189,48 @@ export default function TankSystem({
       onValveChange(savedState.valveState);
     }
   }, [onValveChange]); // onValveChange가 변경될 때마다 실행
+
+  // 밸브 상태 동기화를 위한 브로드캐스트 함수
+  const broadcastValveState = (valveState: string, valveADesc?: string, valveBDesc?: string) => {
+    if (!mqttClient || !mqttClient.connected) return;
+
+    try {
+      const payload = JSON.stringify({
+        clientId: clientId.current,
+        timestamp: Date.now(),
+        valveState: valveState,
+        valveADesc: valveADesc || (valveState[0] === '1' ? '추출순환' : '전체순환'),
+        valveBDesc: valveBDesc || (valveState[1] === '1' ? 'ON' : 'OFF')
+      });
+
+      // 밸브 상태 동기화 토픽에 발행
+      mqttClient.publish(VALVE_STATE_SYNC_TOPIC, payload);
+      console.log('밸브 상태 브로드캐스트:', payload);
+      
+      // 마지막 업데이트 타임스탬프 갱신
+      lastValveUpdateTimestamp.current = Date.now();
+    } catch (error) {
+      console.error('밸브 상태 브로드캐스트 중 오류:', error);
+    }
+  };
+
+  // 최신 밸브 상태 요청 함수
+  const requestLatestValveState = () => {
+    if (!mqttClient || !mqttClient.connected) return;
+
+    try {
+      const payload = JSON.stringify({
+        clientId: clientId.current,
+        timestamp: Date.now()
+      });
+
+      // 밸브 상태 요청 토픽에 발행
+      mqttClient.publish(VALVE_STATE_REQUEST_TOPIC, payload);
+      console.log('최신 밸브 상태 요청');
+    } catch (error) {
+      console.error('밸브 상태 요청 중 오류:', error);
+    }
+  };
 
   return (
     <div className="relative w-full h-[950px] bg-white rounded-lg shadow-sm overflow-hidden border border-gray-100">

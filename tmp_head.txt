@@ -1,0 +1,347 @@
+"use client"
+import { motion } from "framer-motion"
+import { useEffect, useState, useRef, useCallback } from "react"
+import { MqttClient } from "mqtt"
+import { cn } from '@/lib/utils';
+import "./tank-system.css"; // 새로 생성한 CSS 파일 import
+import { PROCESS_PROGRESS_TOPIC, AUTOMATION_STATUS_TOPIC } from "@/lib/mqtt-topics"; // MQTT 토픽 import
+import { Tank } from '@/interface/tank'; // Tank 인터페이스만 임포트
+
+// 고유 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  if (typeof window === 'undefined') return 'server';
+  return `client_${Math.random().toString(36).substring(2, 15)}`;
+};
+
+// 시간 형식 포맷팅 함수 추가
+const formatTimeStr = (): string => {
+  const now = new Date();
+  const hours = now.getHours().toString().padStart(2, '0');
+  const minutes = now.getMinutes().toString().padStart(2, '0');
+  const seconds = now.getSeconds().toString().padStart(2, '0');
+  return `${hours}:${minutes}:${seconds}`;
+};
+
+// 시스템 상태 저장 및 불러오기 함수 개선
+const saveState = async (stateToSave: any) => {
+  try {
+    // 로컬 스토리지에 상태 저장
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
+      
+      // IndexedDB에도 저장
+      if (typeof saveToIndexedDB === 'function') {
+        saveToIndexedDB(stateToSave);
+      }
+      
+      // 다른 탭/창에 상태 변경 알림
+      localStorage.setItem('tankSystemStateUpdate', Date.now().toString());
+    }
+  } catch (error) {
+    console.error('상태 저장 실패:', error);
+  }
+};
+
+// IndexedDB에 상태 저장
+const saveToIndexedDB = (state: any) => {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    console.warn('IndexedDB를 사용할 수 없습니다.');
+    return;
+  }
+  
+  try {
+    const request = window.indexedDB.open('TankSystemDB', 1);
+    
+    request.onupgradeneeded = function(event) {
+      try {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('systemState')) {
+          db.createObjectStore('systemState', { keyPath: 'id' });
+        }
+      } catch (error) {
+        console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+        // 오류가 발생해도 계속 진행
+      }
+    };
+    
+    request.onsuccess = function(event) {
+      try {
+        const db = request.result;
+        const transaction = db.transaction(['systemState'], 'readwrite');
+        const store = transaction.objectStore('systemState');
+        
+        // 항상 같은 키로 저장하여 최신 상태만 유지
+        const putRequest = store.put({
+          id: 'currentState',
+          data: state,
+          timestamp: Date.now()
+        });
+        
+        putRequest.onsuccess = function() {
+          console.log('IndexedDB에 상태 저장 성공');
+        };
+        
+        putRequest.onerror = function(event) {
+          console.warn('IndexedDB 데이터 저장 중 오류:', event);
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+        
+        transaction.onerror = function(event) {
+          console.warn('IndexedDB 트랜잭션 오류:', event);
+        };
+      } catch (error) {
+        console.error('IndexedDB 트랜잭션 생성 중 오류:', error);
+      }
+    };
+    
+    request.onerror = function(event) {
+      console.warn('IndexedDB 열기 오류:', event);
+    };
+  } catch (error) {
+    console.error('IndexedDB 접근 중 예상치 못한 오류:', error);
+  }
+};
+
+// 상태 불러오기 함수 개선
+const loadState = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storedState = localStorage.getItem('tankSystemState');
+      
+      if (storedState) {
+        return JSON.parse(storedState);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('상태 불러오기 실패:', error);
+      return null;
+    }
+  }
+  
+  return null;
+};
+
+// 서버에서 초기 상태 불러오기
+const loadInitialState = async (): Promise<any> => {
+  if (typeof window !== 'undefined') {
+    try {
+      // 서버 API에서 상태 가져오기
+      if (window.navigator.onLine) {
+        try {
+          console.log('서버에서 최신 상태 불러오기 시도...');
+          console.log('API 호출 대신 로컬 스토리지만 사용합니다.');
+        } catch (serverError) {
+          console.error('서버에서 상태 불러오기 실패:', serverError);
+          // 서버 오류 시 계속 진행 - 로컬 저장소 사용
+        }
+      }
+      
+      // 서버에서 불러오기 실패 시 로컬 스토리지에서 불러오기 시도
+      try {
+        const localState = loadState();
+        if (localState) {
+          console.log('로컬 스토리지에서 상태를 불러왔습니다.');
+          return localState;
+        }
+      } catch (localError) {
+        console.error('로컬 스토리지에서 상태 불러오기 실패:', localError);
+        // 로컬 스토리지 오류 시 계속 진행 - IndexedDB 사용
+      }
+      
+      // IndexedDB에서 불러오기 시도
+      try {
+        const idbState = await loadFromIndexedDB();
+        if (idbState) {
+          console.log('IndexedDB에서 상태를 불러왔습니다.');
+          return idbState;
+        }
+      } catch (idbError) {
+        console.error('IndexedDB에서 상태 불러오기 실패:', idbError);
+        // IndexedDB 오류 시 기본값 사용
+      }
+    } catch (error) {
+      console.error('초기 상태 불러오기 전체 프로세스 실패:', error);
+      // 모든 오류 시 기본값 사용
+    }
+  }
+  
+  console.log('사용 가능한 저장된 상태가 없습니다. 기본값 사용.');
+  return null;
+};
+
+// IndexedDB에서 상태 불러오기 (Promise 반환)
+const loadFromIndexedDB = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      console.warn('IndexedDB를 사용할 수 없습니다.');
+      resolve(null);
+      return;
+    }
+    
+    try {
+      const request = window.indexedDB.open('TankSystemDB', 1);
+      
+      request.onupgradeneeded = function(event) {
+        try {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('systemState')) {
+            db.createObjectStore('systemState', { keyPath: 'id' });
+          }
+        } catch (error) {
+          console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+          // 업그레이드 오류가 발생해도 계속 진행 가능하도록 함
+        }
+      };
+      
+      request.onsuccess = function(event) {
+        try {
+          const db = request.result;
+          const transaction = db.transaction(['systemState'], 'readonly');
+          const store = transaction.objectStore('systemState');
+          const getRequest = store.get('currentState');
+          
+          getRequest.onsuccess = function() {
+            if (getRequest.result) {
+              resolve(getRequest.result.data);
+            } else {
+              console.log('IndexedDB에 저장된 상태가 없습니다.');
+              resolve(null);
+            }
+          };
+          
+          getRequest.onerror = function(event) {
+            console.warn('IndexedDB 읽기 오류:', event);
+            resolve(null); // 오류 발생 시에도 null을 반환하여 앱이 계속 실행되도록 함
+          };
+          
+          transaction.oncomplete = function() {
+            db.close();
+          };
+        } catch (error) {
+          console.error('IndexedDB 트랜잭션 중 오류:', error);
+          resolve(null);
+        }
+      };
+      
+      request.onerror = function(event) {
+        console.warn('IndexedDB 접근 오류:', event);
+        resolve(null); // reject 대신 resolve(null)을 사용하여 앱이 계속 실행되도록 함
+      };
+    } catch (error) {
+      console.error('IndexedDB 사용 중 예상치 못한 오류:', error);
+      resolve(null); // 모든 예외 상황에서도 앱이 계속 실행되도록 함
+    }
+  });
+};
+
+interface TankSystemProps {
+  tankData: {
+    mainTank: {
+      level: number
+      status: string
+    }
+    tanks: Tank[]
+    valveState: string
+    valveStatusMessage?: string
+    valveADesc?: string  // 밸브 A 설명 추가
+    valveBDesc?: string  // 밸브 B 설명 추가
+    tankMessages?: Record<number, string>
+    mainTankMessage?: string
+    progressInfo?: {
+      step: string
+      elapsedTime: string
+      remainingTime: string
+      totalRemainingTime: string
+    }
+  }
+  onValveChange: (newState: string) => void
+  onPumpToggle?: (pumpId: number) => void  // 펌프 토글 함수
+  onPumpReset?: (pumpId: number) => void   // 펌프 리셋 함수
+  onPumpKCommand?: (pumpId: number) => void // 펌프 K 명령 함수
+  // onExtractionCommand 속성 제거됨
+  pumpStateMessages?: Record<number, string> // 펌프 상태 메시지
+  mqttClient?: MqttClient // MQTT 클라이언트 추가
+  kButtonActive?: boolean // K 버튼 활성화 여부
+  pumpMessages?: Record<number, string> // 펌프 메시지
+  progressMessages?: Array<{timestamp: number, message: string, rawJson?: string | null}> // 진행 메시지 추가
+  setProgressMessages?: (messages: Array<{timestamp: number, message: string, rawJson?: string | null}> | ((prev: Array<{timestamp: number, message: string, rawJson?: string | null}>) => Array<{timestamp: number, message: string, rawJson?: string | null}>)) => void // 진행 메시지 업데이트 함수 추가
+}
+
+// 추출 진행 메시지를 위한 인터페이스
+interface ExtractionProgress {
+  timestamp: number
+  message: string
+}
+
+// 연결 상태를 위한 인터페이스
+interface ConnectionStatus {
+  connected: boolean
+  lastConnected: Date | null
+  reconnecting: boolean
+}
+
+// 펄스 애니메이션을 위한 스타일 추가
+const pulseCss = `
+  @keyframes pulse {
+    0% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0.6;
+    }
+  }
+`;
+
+// 알림을 위한 커스텀 인터페이스 정의
+interface SystemNotification {
+  message: string;
+  timestamp: number;
+  source?: string;
+  type?: 'info' | 'warning' | 'error';
+  pumpId?: number;
+}
+
+export default function TankSystem({ 
+  tankData, 
+  onValveChange, 
+  progressMessages = [], 
+  onPumpToggle, 
+  onPumpReset,
+  onPumpKCommand,
+  pumpStateMessages = {},
+  mqttClient,
+  // onExtractionCommand 속성 제거됨
+  kButtonActive,
+  pumpMessages,
+  setProgressMessages
+}: TankSystemProps) {
+  // MQTT 토픽에서 진행 정보 파싱을 위한 인터페이스 추가
+  interface ProcessProgress {
+    mode: string;             // 작동 모드 (동시모드, 순차모드, 오버랩모드)
+    elapsed_time: number;     // 경과 시간 (초)
+    remaining_time: number;   // 남은 시간 (초)
+    total_repeats: number;    // 총 반복 횟수 
+    current_repeat: number;   // 현재 반복 횟수
+    pump_id?: string;         // 펌프 ID (순차모드, 오버랩모드에서 사용)
+  }
+
+  // 진행 상태 정보 저장 (펌프 ID별)
+  const [pumpProgressInfo, setPumpProgressInfo] = useState<Record<number, ProcessProgress>>({});
+  const [isResetDragging, setIsResetDragging] = useState<Record<number, boolean>>({});
+  const [dragStartPos, setDragStartPos] = useState<{x: number, y: number}>({x: 0, y: 0});
+  const [isPumpDragging, setIsPumpDragging] = useState<Record<number, boolean>>({});
+  const [pumpClickStatus, setPumpClickStatus] = useState<Record<number, boolean>>({});
+  const [isPumpHolding, setIsPumpHolding] = useState<number | null>(null);
+  const pumpHoldTimer = useRef<number | null>(null);
+  const [lastProcessedMessage, setLastProcessedMessage] = useState<string>('');
+  const [extractionStarted, setExtractionStarted] = useState<boolean>(false);
