@@ -4240,51 +4240,41 @@ export default function TankSystem({
                                 );
                               }
                               
-                              try {
-                                const jsonData = JSON.parse(msg.rawJson);
-                                return (
-                                  <>
-                                    {jsonData.process_info && (
-                                <div>
-                                  <span className="font-semibold text-green-700">진행:</span>{" "}
-                                      <span className="font-medium">{jsonData.process_info}</span>
-                                </div>
-                              )}
-                                    {jsonData.pump_id && (
-                                <div>
-                                        <span className="font-semibold text-green-700">펌프:</span>{" "}
-                                      <span className="font-medium">{jsonData.pump_id}</span>
-                                </div>
-                              )}
-                                    {jsonData.remaining_time && (
-                                <div>
-                                  <span className="font-semibold text-green-700">남은:</span>{" "}
-                                      <span className="font-medium">{jsonData.remaining_time}</span>
-                                </div>
-                              )}
-                                    {jsonData.total_remaining && (
-                                <div>
-                                  <span className="font-semibold text-green-700">총남은:</span>{" "}
-                                      <span className="font-medium">{jsonData.total_remaining}</span>
-                                </div>
-                              )}
-                                    {jsonData.total_time && (
-                                <div>
-                                  <span className="font-semibold text-green-700">총시간:</span>{" "}
-                                      <span className="font-medium">{jsonData.total_time}</span>
-                                </div>
-                              )}
-                                  </>
-                                );
-                              } catch (jsonParseError) {
-                                console.error("JSON 파싱 내부 오류:", jsonParseError);
-                                return (
-                                  <div className="col-span-2">
-                                    <span className="font-semibold text-red-500">파싱 오류:</span>{" "}
-                                    <span className="font-medium">{msg.rawJson}</span>
-                                  </div>
-                                );
-                              }
+                              const jsonData = JSON.parse(msg.rawJson);
+                              return (
+                                <>
+                                  {jsonData.process_info && (
+                              <div>
+                                <span className="font-semibold text-green-700">진행:</span>{" "}
+                                    <span className="font-medium">{jsonData.process_info}</span>
+                              </div>
+                            )}
+                                  {jsonData.pump_id && (
+                              <div>
+                                      <span className="font-semibold text-green-700">펌프:</span>{" "}
+                                    <span className="font-medium">{jsonData.pump_id}</span>
+                              </div>
+                            )}
+                                  {jsonData.remaining_time && (
+                              <div>
+                                <span className="font-semibold text-green-700">남은:</span>{" "}
+                                    <span className="font-medium">{jsonData.remaining_time}</span>
+                              </div>
+                            )}
+                                  {jsonData.total_remaining && (
+                              <div>
+                                <span className="font-semibold text-green-700">총남은:</span>{" "}
+                                    <span className="font-medium">{jsonData.total_remaining}</span>
+                              </div>
+                            )}
+                                  {jsonData.total_time && (
+                              <div>
+                                <span className="font-semibold text-green-700">총시간:</span>{" "}
+                                    <span className="font-medium">{jsonData.total_time}</span>
+                              </div>
+                            )}
+                                </>
+                              );
                             } catch (error) {
                               console.error("JSON 파싱 오류:", error, "데이터:", msg.rawJson?.substring(0, 50));
                               return (
