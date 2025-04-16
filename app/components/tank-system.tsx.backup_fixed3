@@ -1,4 +1,3 @@
-"use client"
 import { motion } from "framer-motion"
 import { useEffect, useState, useRef, useCallback } from "react"
 import { MqttClient } from "mqtt"
@@ -13,12 +12,20 @@ const generateClientId = () => {
   return `client_${Math.random().toString(36).substring(2, 15)}`;
 };
 
+// 시간 형식 포맷팅 함수 추가
+const formatTimeStr = (): string => {
+  const now = new Date();
+  const hours = now.getHours().toString().padStart(2, '0');
+  const minutes = now.getMinutes().toString().padStart(2, '0');
+  const seconds = now.getSeconds().toString().padStart(2, '0');
+  return `${hours}:${minutes}:${seconds}`;
+};
+
 // 시스템 상태 저장 및 불러오기 함수 개선
 const saveState = async (stateToSave: any) => {
   try {
     // 로컬 스토리지에 상태 저장
     if (typeof window !== 'undefined') {
-      // 전체 상태를 로컬 스토리지에 저장
       localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
       
       // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
@@ -26,15 +33,7 @@ const saveState = async (stateToSave: any) => {
       
       // IndexedDB에도 저장
       if (typeof saveToIndexedDB === 'function') {
-        // extractionCommand 필드를 제외한 복사본 생성
-        const stateForStorage = {...stateToSave};
-        
-        // 서버와 충돌할 수 있는 필드 제거
-        if (stateForStorage.extractionCommand) {
-          delete stateForStorage.extractionCommand;
-        }
-        
-        saveToIndexedDB(stateForStorage);
+        saveToIndexedDB(stateToSave);
       }
       
       // 다른 탭/창에 상태 변경 알림
@@ -114,7 +113,882 @@ const loadState = () => {
     try {
       const storedState = localStorage.getItem('tankSystemState');
       
-      if (storedState && storedState !== 'undefined') {
+      if (storedState) {
+        return JSON.parse(storedState);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('상태 불러오기 실패:', error);
+      return null;
+    }
+  }
+  
+  return null;
+};
+
+// 서버에서 초기 상태 불러오기
+const loadInitialState = async (): Promise<any> => {
+  if (typeof window !== 'undefined') {
+    try {
+      // 서버 API에서 상태 가져오기
+      if (window.navigator.onLine) {
+        try {
+          console.log('서버에서 최신 상태 불러오기 시도...');
+          console.log('API 호출 대신 로컬 스토리지만 사용합니다.');
+        } catch (serverError) {
+          console.error('서버에서 상태 불러오기 실패:', serverError);
+          // 서버 오류 시 계속 진행 - 로컬 저장소 사용
+        }
+      }
+      
+      // 서버에서 불러오기 실패 시 로컬 스토리지에서 불러오기 시도
+      try {
+        const localState = loadState();
+        if (localState) {
+          console.log('로컬 스토리지에서 상태를 불러왔습니다.');
+          return localState;
+        }
+      } catch (localError) {
+        console.error('로컬 스토리지에서 상태 불러오기 실패:', localError);
+        // 로컬 스토리지 오류 시 계속 진행 - IndexedDB 사용
+      }
+      
+      // IndexedDB에서 불러오기 시도
+      try {
+        const idbState = await loadFromIndexedDB();
+        if (idbState) {
+          console.log('IndexedDB에서 상태를 불러왔습니다.');
+          return idbState;
+        }
+      } catch (idbError) {
+        console.error('IndexedDB에서 상태 불러오기 실패:', idbError);
+        // IndexedDB 오류 시 기본값 사용
+      }
+    } catch (error) {
+      console.error('초기 상태 불러오기 전체 프로세스 실패:', error);
+      // 모든 오류 시 기본값 사용
+    }
+  }
+  
+  console.log('사용 가능한 저장된 상태가 없습니다. 기본값 사용.');
+  return null;
+};
+
+// IndexedDB에서 상태 불러오기 (Promise 반환)
+const loadFromIndexedDB = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      console.warn('IndexedDB를 사용할 수 없습니다.');
+      resolve(null);
+      return;
+    }
+    
+    try {
+      const request = window.indexedDB.open('TankSystemDB', 1);
+      
+      request.onupgradeneeded = function(event) {
+        try {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('systemState')) {
+            db.createObjectStore('systemState', { keyPath: 'id' });
+          }
+        } catch (error) {
+          console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+          // 업그레이드 오류가 발생해도 계속 진행 가능하도록 함
+        }
+      };
+      
+      request.onsuccess = function(event) {
+        try {
+          const db = request.result;
+          const transaction = db.transaction(['systemState'], 'readonly');
+          const store = transaction.objectStore('systemState');
+          const getRequest = store.get('currentState');
+          
+          getRequest.onsuccess = function() {
+            if (getRequest.result) {
+              resolve(getRequest.result.data);
+            } else {
+              console.log('IndexedDB에 저장된 상태가 없습니다.');
+              resolve(null);
+            }
+          };
+          
+          getRequest.onerror = function(event) {
+            console.warn('IndexedDB 읽기 오류:', event);
+            resolve(null); // 오류 발생 시에도 null을 반환하여 앱이 계속 실행되도록 함
+          };
+          
+          transaction.oncomplete = function() {
+            db.close();
+          };
+        } catch (error) {
+          console.error('IndexedDB 트랜잭션 중 오류:', error);
+          resolve(null);
+        }
+      };
+      
+      request.onerror = function(event) {
+        console.warn('IndexedDB 접근 오류:', event);
+        resolve(null); // reject 대신 resolve(null)을 사용하여 앱이 계속 실행되도록 함
+      };
+    } catch (error) {
+      console.error('IndexedDB 사용 중 예상치 못한 오류:', error);
+      resolve(null); // 모든 예외 상황에서도 앱이 계속 실행되도록 함
+    }
+  });
+};
+
+interface TankSystemProps {
+  tankData: {
+    mainTank: {
+      level: number
+      status: string
+    }
+    tanks: Tank[]
+    valveState: string
+    valveStatusMessage?: string
+    valveADesc?: string  // 밸브 A 설명 추가
+    valveBDesc?: string  // 밸브 B 설명 추가
+    tankMessages?: Record<number, string>
+    mainTankMessage?: string
+    progressInfo?: {
+      step: string
+      elapsedTime: string
+      remainingTime: string
+      totalRemainingTime: string
+    }
+  }
+  onValveChange: (newState: string) => void
+  onPumpToggle?: (pumpId: number) => void  // 펌프 토글 함수
+  onPumpReset?: (pumpId: number) => void   // 펌프 리셋 함수
+  onPumpKCommand?: (pumpId: number) => void // 펌프 K 명령 함수
+  // onExtractionCommand 속성 제거됨
+  pumpStateMessages?: Record<number, string> // 펌프 상태 메시지
+  mqttClient?: MqttClient // MQTT 클라이언트 추가
+  kButtonActive?: boolean // K 버튼 활성화 여부
+  pumpMessages?: Record<number, string> // 펌프 메시지
+  progressMessages?: Array<{timestamp: number, message: string, rawJson?: string | null}> // 진행 메시지 추가
+  setProgressMessages?: (messages: Array<{timestamp: number, message: string, rawJson?: string | null}> | ((prev: Array<{timestamp: number, message: string, rawJson?: string | null}>) => Array<{timestamp: number, message: string, rawJson?: string | null}>)) => void // 진행 메시지 업데이트 함수 추가
+}
+
+// 추출 진행 메시지를 위한 인터페이스
+interface ExtractionProgress {
+  timestamp: number
+  message: string
+}
+
+// 연결 상태를 위한 인터페이스
+interface ConnectionStatus {
+  connected: boolean
+  lastConnected: Date | null
+  reconnecting: boolean
+}
+
+// 펄스 애니메이션을 위한 스타일 추가
+const pulseCss = `
+  @keyframes pulse {
+    0% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0.6;
+    }
+  }
+`;
+
+// 알림을 위한 커스텀 인터페이스 정의
+interface SystemNotification {
+  message: string;
+  timestamp: number;
+  source?: string;
+  type?: 'info' | 'warning' | 'error';
+  pumpId?: number;
+}
+
+export default function TankSystem({ 
+  tankData, 
+  onValveChange, 
+  progressMessages = [], 
+  onPumpToggle, 
+  onPumpReset,
+  onPumpKCommand,
+  pumpStateMessages = {},
+  mqttClient,
+  // onExtractionCommand 속성 제거됨
+  kButtonActive,
+  pumpMessages,
+  setProgressMessages
+}: TankSystemProps) {
+  // MQTT 토픽에서 진행 정보 파싱을 위한 인터페이스 추가
+  interface ProcessProgress {
+    mode: string;             // 작동 모드 (동시모드, 순차모드, 오버랩모드)
+    elapsed_time: number;     // 경과 시간 (초)
+    remaining_time: number;   // 남은 시간 (초)
+    total_repeats: number;    // 총 반복 횟수 
+    current_repeat: number;   // 현재 반복 횟수
+    pump_id?: string;         // 펌프 ID (순차모드, 오버랩모드에서 사용)
+  }
+
+  // 진행 상태 정보 저장 (펌프 ID별)
+  const [pumpProgressInfo, setPumpProgressInfo] = useState<Record<number, ProcessProgress>>({});
+  const [isResetDragging, setIsResetDragging] = useState<Record<number, boolean>>({});
+  const [dragStartPos, setDragStartPos] = useState<{x: number, y: number}>({x: 0, y: 0});
+  const [isPumpDragging, setIsPumpDragging] = useState<Record<number, boolean>>({});
+  const [pumpClickStatus, setPumpClickStatus] = useState<Record<number, boolean>>({});
+  const [isPumpHolding, setIsPumpHolding] = useState<number | null>(null);
+  const pumpHoldTimer = useRef<number | null>(null);
+  const [lastProcessedMessage, setLastProcessedMessage] = useState<string>('');
+  const [extractionStarted, setExtractionStarted] = useState<boolean>(false);
+  const [extractionCompleteMessage, setExtractionCompleteMessage] = useState<string>("");
+  const [automationStatus, setAutomationStatus] = useState<string>("");
+import { motion } from "framer-motion"
+import { useEffect, useState, useRef, useCallback } from "react"
+import { MqttClient } from "mqtt"
+import { cn } from '@/lib/utils';
+import "./tank-system.css"; // 새로 생성한 CSS 파일 import
+import { PROCESS_PROGRESS_TOPIC, AUTOMATION_STATUS_TOPIC } from "@/lib/mqtt-topics"; // MQTT 토픽 import
+import { Tank } from '@/interface/tank'; // Tank 인터페이스만 임포트
+
+// 고유 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  if (typeof window === 'undefined') return 'server';
+  return `client_${Math.random().toString(36).substring(2, 15)}`;
+};
+
+// 시간 형식 포맷팅 함수 추가
+const formatTimeStr = (): string => {
+  const now = new Date();
+  const hours = now.getHours().toString().padStart(2, '0');
+  const minutes = now.getMinutes().toString().padStart(2, '0');
+  const seconds = now.getSeconds().toString().padStart(2, '0');
+  return `${hours}:${minutes}:${seconds}`;
+};
+
+// 시스템 상태 저장 및 불러오기 함수 개선
+const saveState = async (stateToSave: any) => {
+  try {
+    // 로컬 스토리지에 상태 저장
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
+      
+      // IndexedDB에도 저장
+      if (typeof saveToIndexedDB === 'function') {
+        saveToIndexedDB(stateToSave);
+      }
+      
+      // 다른 탭/창에 상태 변경 알림
+      localStorage.setItem('tankSystemStateUpdate', Date.now().toString());
+    }
+  } catch (error) {
+    console.error('상태 저장 실패:', error);
+  }
+};
+
+// IndexedDB에 상태 저장
+const saveToIndexedDB = (state: any) => {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    console.warn('IndexedDB를 사용할 수 없습니다.');
+    return;
+  }
+  
+  try {
+    const request = window.indexedDB.open('TankSystemDB', 1);
+    
+    request.onupgradeneeded = function(event) {
+      try {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('systemState')) {
+          db.createObjectStore('systemState', { keyPath: 'id' });
+        }
+      } catch (error) {
+        console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+        // 오류가 발생해도 계속 진행
+      }
+    };
+    
+    request.onsuccess = function(event) {
+      try {
+        const db = request.result;
+        const transaction = db.transaction(['systemState'], 'readwrite');
+        const store = transaction.objectStore('systemState');
+        
+        // 항상 같은 키로 저장하여 최신 상태만 유지
+        const putRequest = store.put({
+          id: 'currentState',
+          data: state,
+          timestamp: Date.now()
+        });
+        
+        putRequest.onsuccess = function() {
+          console.log('IndexedDB에 상태 저장 성공');
+        };
+        
+        putRequest.onerror = function(event) {
+          console.warn('IndexedDB 데이터 저장 중 오류:', event);
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+        
+        transaction.onerror = function(event) {
+          console.warn('IndexedDB 트랜잭션 오류:', event);
+        };
+      } catch (error) {
+        console.error('IndexedDB 트랜잭션 생성 중 오류:', error);
+      }
+    };
+    
+    request.onerror = function(event) {
+      console.warn('IndexedDB 열기 오류:', event);
+    };
+  } catch (error) {
+    console.error('IndexedDB 접근 중 예상치 못한 오류:', error);
+  }
+};
+
+// 상태 불러오기 함수 개선
+const loadState = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storedState = localStorage.getItem('tankSystemState');
+      
+      if (storedState) {
+        return JSON.parse(storedState);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('상태 불러오기 실패:', error);
+      return null;
+    }
+  }
+  
+  return null;
+};
+
+// 서버에서 초기 상태 불러오기
+const loadInitialState = async (): Promise<any> => {
+  if (typeof window !== 'undefined') {
+    try {
+      // 서버 API에서 상태 가져오기
+      if (window.navigator.onLine) {
+        try {
+          console.log('서버에서 최신 상태 불러오기 시도...');
+          console.log('API 호출 대신 로컬 스토리지만 사용합니다.');
+        } catch (serverError) {
+          console.error('서버에서 상태 불러오기 실패:', serverError);
+          // 서버 오류 시 계속 진행 - 로컬 저장소 사용
+        }
+      }
+      
+      // 서버에서 불러오기 실패 시 로컬 스토리지에서 불러오기 시도
+      try {
+        const localState = loadState();
+        if (localState) {
+          console.log('로컬 스토리지에서 상태를 불러왔습니다.');
+          return localState;
+        }
+      } catch (localError) {
+        console.error('로컬 스토리지에서 상태 불러오기 실패:', localError);
+        // 로컬 스토리지 오류 시 계속 진행 - IndexedDB 사용
+      }
+      
+      // IndexedDB에서 불러오기 시도
+      try {
+        const idbState = await loadFromIndexedDB();
+        if (idbState) {
+          console.log('IndexedDB에서 상태를 불러왔습니다.');
+          return idbState;
+        }
+      } catch (idbError) {
+        console.error('IndexedDB에서 상태 불러오기 실패:', idbError);
+        // IndexedDB 오류 시 기본값 사용
+      }
+    } catch (error) {
+      console.error('초기 상태 불러오기 전체 프로세스 실패:', error);
+      // 모든 오류 시 기본값 사용
+    }
+  }
+  
+  console.log('사용 가능한 저장된 상태가 없습니다. 기본값 사용.');
+  return null;
+};
+
+// IndexedDB에서 상태 불러오기 (Promise 반환)
+const loadFromIndexedDB = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      console.warn('IndexedDB를 사용할 수 없습니다.');
+      resolve(null);
+      return;
+    }
+    
+    try {
+      const request = window.indexedDB.open('TankSystemDB', 1);
+      
+      request.onupgradeneeded = function(event) {
+        try {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('systemState')) {
+            db.createObjectStore('systemState', { keyPath: 'id' });
+          }
+        } catch (error) {
+          console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+          // 업그레이드 오류가 발생해도 계속 진행 가능하도록 함
+        }
+      };
+      
+      request.onsuccess = function(event) {
+        try {
+          const db = request.result;
+          const transaction = db.transaction(['systemState'], 'readonly');
+          const store = transaction.objectStore('systemState');
+          const getRequest = store.get('currentState');
+          
+          getRequest.onsuccess = function() {
+            if (getRequest.result) {
+              resolve(getRequest.result.data);
+            } else {
+              console.log('IndexedDB에 저장된 상태가 없습니다.');
+              resolve(null);
+            }
+          };
+          
+          getRequest.onerror = function(event) {
+            console.warn('IndexedDB 읽기 오류:', event);
+            resolve(null); // 오류 발생 시에도 null을 반환하여 앱이 계속 실행되도록 함
+          };
+          
+          transaction.oncomplete = function() {
+            db.close();
+          };
+        } catch (error) {
+          console.error('IndexedDB 트랜잭션 중 오류:', error);
+          resolve(null);
+        }
+      };
+      
+      request.onerror = function(event) {
+        console.warn('IndexedDB 접근 오류:', event);
+        resolve(null); // reject 대신 resolve(null)을 사용하여 앱이 계속 실행되도록 함
+      };
+    } catch (error) {
+      console.error('IndexedDB 사용 중 예상치 못한 오류:', error);
+      resolve(null); // 모든 예외 상황에서도 앱이 계속 실행되도록 함
+    }
+  });
+};
+
+interface TankSystemProps {
+  tankData: {
+    mainTank: {
+      level: number
+      status: string
+    }
+    tanks: Tank[]
+    valveState: string
+    valveStatusMessage?: string
+    valveADesc?: string  // 밸브 A 설명 추가
+    valveBDesc?: string  // 밸브 B 설명 추가
+    tankMessages?: Record<number, string>
+    mainTankMessage?: string
+    progressInfo?: {
+      step: string
+      elapsedTime: string
+      remainingTime: string
+      totalRemainingTime: string
+    }
+  }
+  onValveChange: (newState: string) => void
+  onPumpToggle?: (pumpId: number) => void  // 펌프 토글 함수
+  onPumpReset?: (pumpId: number) => void   // 펌프 리셋 함수
+  onPumpKCommand?: (pumpId: number) => void // 펌프 K 명령 함수
+  // onExtractionCommand 속성 제거됨
+  pumpStateMessages?: Record<number, string> // 펌프 상태 메시지
+  mqttClient?: MqttClient // MQTT 클라이언트 추가
+  kButtonActive?: boolean // K 버튼 활성화 여부
+  pumpMessages?: Record<number, string> // 펌프 메시지
+  progressMessages?: Array<{timestamp: number, message: string, rawJson?: string | null}> // 진행 메시지 추가
+  setProgressMessages?: (messages: Array<{timestamp: number, message: string, rawJson?: string | null}> | ((prev: Array<{timestamp: number, message: string, rawJson?: string | null}>) => Array<{timestamp: number, message: string, rawJson?: string | null}>)) => void // 진행 메시지 업데이트 함수 추가
+}
+
+// 추출 진행 메시지를 위한 인터페이스
+interface ExtractionProgress {
+  timestamp: number
+  message: string
+}
+
+// 연결 상태를 위한 인터페이스
+interface ConnectionStatus {
+  connected: boolean
+  lastConnected: Date | null
+  reconnecting: boolean
+}
+
+// 펄스 애니메이션을 위한 스타일 추가
+const pulseCss = `
+  @keyframes pulse {
+    0% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0.6;
+    }
+  }
+`;
+
+// 알림을 위한 커스텀 인터페이스 정의
+interface SystemNotification {
+  message: string;
+  timestamp: number;
+  source?: string;
+  type?: 'info' | 'warning' | 'error';
+  pumpId?: number;
+}
+
+export default function TankSystem({ 
+  tankData, 
+  onValveChange, 
+  progressMessages = [], 
+  onPumpToggle, 
+  onPumpReset,
+  onPumpKCommand,
+  pumpStateMessages = {},
+  mqttClient,
+  // onExtractionCommand 속성 제거됨
+  kButtonActive,
+  pumpMessages,
+  setProgressMessages
+}: TankSystemProps) {
+  // 고유 클라이언트 ID 생성 함수
+  const generateClientId = () => {
+    if (typeof window === 'undefined') return 'server';
+    return `client_${Math.random().toString(36).substring(2, 15)}`;
+  };
+
+  // MQTT 토픽에서 진행 정보 파싱을 위한 인터페이스 추가
+  interface ProcessProgress {
+    mode: string;             // 작동 모드 (동시모드, 순차모드, 오버랩모드)
+    elapsed_time: number;     // 경과 시간 (초)
+    remaining_time: number;   // 남은 시간 (초)
+    total_repeats: number;    // 총 반복 횟수 
+    current_repeat: number;   // 현재 반복 횟수
+    pump_id?: string;         // 펌프 ID (순차모드, 오버랩모드에서 사용)
+  }
+
+  // 진행 상태 정보 저장 (펌프 ID별)
+  const [pumpProgressInfo, setPumpProgressInfo] = useState<Record<number, ProcessProgress>>({});
+  const [isResetDragging, setIsResetDragging] = useState<Record<number, boolean>>({});
+  const [dragStartPos, setDragStartPos] = useState<{x: number, y: number}>({x: 0, y: 0});
+  const [isPumpDragging, setIsPumpDragging] = useState<Record<number, boolean>>({});
+  const [pumpClickStatus, setPumpClickStatus] = useState<Record<number, boolean>>({});
+  const [isPumpHolding, setIsPumpHolding] = useState<number | null>(null);
+  const pumpHoldTimer = useRef<number | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [lastProcessedMessage, setLastProcessedMessage] = useState<string>('');
+  const [extractionStarted, setExtractionStarted] = useState<boolean>(false);
+  const [extractionCompleteMessage, setExtractionCompleteMessage] = useState<string>("");
+  const [automationStatus, setAutomationStatus] = useState<string>("");
+  const [automationProgress, setAutomationProgress] = useState<string>("");
+  const [automationWaitTime, setAutomationWaitTime] = useState<{value: number, endTime?: number} | null>(null);
+  const [lastProgressPercent, setLastProgressPercent] = useState<number>(0); // 진행률 상태 추가
+
+  // 파이프 활성화 상태 관리
+  const [pipeActiveStatus, setPipeActiveStatus] = useState<Record<number, boolean>>({});
+
+  // 진행 정보 메시지 파싱 함수 - extwork/extraction/progress 토픽용
+  const parseProgressMessage = (messageStr: string): ProcessProgress | null => {
+    try {
+      // JSON 파싱 시도
+      if (messageStr.startsWith('{') && messageStr.endsWith('}')) {
+        const progressData = JSON.parse(messageStr);
+        
+        // 기본 필드 확인
+        if (progressData.elapsed_time && progressData.remaining_time) {
+          // 경과 시간과 남은 시간을 초 단위로 파싱
+          const elapsedStr = progressData.elapsed_time.replace('s', '');
+          const remainingStr = progressData.remaining_time.replace('s', '');
+          const elapsed = parseInt(elapsedStr, 10);
+          const remaining = parseInt(remainingStr, 10);
+          
+          // 기본 프로그레스 정보 객체
+          const progress: ProcessProgress = {
+            mode: '',
+            elapsed_time: elapsed,
+            remaining_time: remaining,
+            total_repeats: 1,
+            current_repeat: 0,
+            pump_id: undefined
+          };
+          
+          // 모드 정보 파싱
+          if (progressData.mode) {
+            progress.mode = progressData.mode;
+          } else if (messageStr.includes('동시모드')) {
+            progress.mode = '동시모드';
+          } else if (messageStr.includes('순차모드')) {
+            progress.mode = '순차모드';
+          } else if (messageStr.includes('오버랩모드')) {
+            progress.mode = '오버랩모드';
+          }
+          
+          // 반복 횟수 정보 파싱 - 동시모드
+          if (progress.mode === '동시모드' && progressData.process_info) {
+            const processMatch = progressData.process_info.match(/S\((\d+)\/(\d+)\)/);
+            if (processMatch) {
+              progress.current_repeat = parseInt(processMatch[1], 10);
+              progress.total_repeats = parseInt(processMatch[2], 10) || 1; // 0이면 1로 처리
+            }
+          }
+          
+          // 펌프 ID 및 반복 횟수 파싱 - 순차모드 & 오버랩모드
+          if ((progress.mode === '순차모드' || progress.mode === '오버랩모드') && progressData.pump_id) {
+            // 정확한 패턴 매칭: "1(0/9)" 형식
+            const pumpMatch = progressData.pump_id.match(/(\d+)\((\d+)\/(\d+)\)/);
+            if (pumpMatch) {
+              progress.pump_id = pumpMatch[1]; // 펌프 ID (예: "1")
+              
+              // 순차 모드 개선: 정확한 현재 반복 횟수와 총 반복 횟수 계산
+              progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수 (예: 0)
+              
+              // 총 반복 횟수 처리 - 0부터 시작하므로 +1
+              const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+              progress.total_repeats = totalRepeats || 1; // 총 반복 횟수가 0이면 1로 설정
+              
+              console.log(`펌프 ${progress.pump_id} 진행 정보 파싱: 현재 ${progress.current_repeat+1}/${progress.total_repeats} 회 (${((progress.current_repeat/progress.total_repeats)*100).toFixed(1)}% 진행)`);
+            }
+          }
+          
+          return progress;
+        }
+      }
+      
+      // 텍스트 형식으로 된 메시지 파싱 시도 (비 JSON 형식)
+      const elapsedMatch = messageStr.match(/경과:\s*(\d+)s/) || messageStr.match(/elapsed_time":\s*"(\d+)s/);
+      const remainingMatch = messageStr.match(/남은:\s*(\d+)s/) || messageStr.match(/remaining_time":\s*"(\d+)s/);
+      
+      if (elapsedMatch && remainingMatch) {
+        const elapsed = parseInt(elapsedMatch[1], 10);
+        const remaining = parseInt(remainingMatch[1], 10);
+        
+        // 기본 프로그레스 정보 객체
+        const progress: ProcessProgress = {
+          mode: '',
+          elapsed_time: elapsed,
+          remaining_time: remaining,
+          total_repeats: 1,
+          current_repeat: 0,
+          pump_id: undefined
+        };
+        
+        // 모드 정보 파싱
+        if (messageStr.includes('동시모드')) {
+          progress.mode = '동시모드';
+          // 동시모드 반복 횟수 정보 파싱
+          const processMatch = messageStr.match(/S\((\d+)\/(\d+)\)/);
+          if (processMatch) {
+            progress.current_repeat = parseInt(processMatch[1], 10);
+            progress.total_repeats = parseInt(processMatch[2], 10) || 1; // 0이면 1로 처리
+          }
+        } else if (messageStr.includes('순차모드')) {
+          progress.mode = '순차모드';
+          
+          // 순차모드 펌프 ID 및 반복 횟수 파싱 - 개선된 정규식
+          const pumpMatch = messageStr.match(/펌프\s*(\d+)\s*\((\d+)\/(\d+)\)/) || 
+                            messageStr.match(/(\d+)\((\d+)\/(\d+)\)/);
+          
+          if (pumpMatch) {
+            progress.pump_id = pumpMatch[1]; // 펌프 ID
+            progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수
+            
+            // 총 반복 횟수 처리 - 0이면 1로 설정 (100% 채워짐)
+            const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+            progress.total_repeats = totalRepeats || 1;
+            
+            console.log(`[텍스트] 펌프 ${progress.pump_id} 순차모드 진행 정보: ${progress.current_repeat+1}/${progress.total_repeats} 회`);
+          }
+        } else if (messageStr.includes('오버랩모드')) {
+          progress.mode = '오버랩모드';
+          
+          // 오버랩모드 펌프 ID 및 반복 횟수 파싱 - 개선된 정규식
+          const pumpMatch = messageStr.match(/펌프\s*(\d+)\s*\((\d+)\/(\d+)\)/) || 
+                            messageStr.match(/(\d+)\((\d+)\/(\d+)\)/);
+                          
+          if (pumpMatch) {
+            progress.pump_id = pumpMatch[1]; // 펌프 ID
+            progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수
+            
+            // 총 반복 횟수 처리 - 0이면 1로 설정 (100% 채워짐)
+            const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+            progress.total_repeats = totalRepeats || 1;
+            
+            console.log(`[텍스트] 펌프 ${progress.pump_id} 오버랩모드 진행 정보: ${progress.current_repeat+1}/${progress.total_repeats} 회`);
+          }
+        }
+        
+        return progress;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('진행 정보 파싱 오류:', error);
+      return null;
+    }
+  };
+
+  // 애니메이션을 위한 상태 추가
+  const [fillPercentage, setFillPercentage] = useState(0);
+  
+  // 길게 누르기 감지를 위한 타이머 상태 추가
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [currentPressedPump, setCurrentPressedPump] = useState<number | null>(null);
+  
+  // 클라이언트 ID 상태 추가
+  const clientId = useRef(generateClientId());
+  
+  // 마지막 상태 업데이트 시간
+  const [lastStateUpdate, setLastStateUpdate] = useState<Date | null>(null);
+  
+  // 연결 상태 추가
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
+    connected: false,
+    lastConnected: null,
+    reconnecting: false
+  });
+  
+  // 상태 변경 알림을 위한 상태 업데이트 - SystemNotification 타입 사용
+  const [notificationsList, setNotificationsList] = useState<SystemNotification[]>([]);
+
+  // 알림 추가 함수 
+  const addNotification = (message: string, type: 'info' | 'warning' | 'error' = 'info', pumpId?: number) => {
+import { motion } from "framer-motion"
+import { useEffect, useState, useRef, useCallback } from "react"
+import { MqttClient } from "mqtt"
+import { cn } from '@/lib/utils';
+import "./tank-system.css"; // 새로 생성한 CSS 파일 import
+import { PROCESS_PROGRESS_TOPIC, AUTOMATION_STATUS_TOPIC } from "@/lib/mqtt-topics"; // MQTT 토픽 import
+import { Tank } from '@/interface/tank'; // Tank 인터페이스만 임포트
+
+// 고유 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  if (typeof window === 'undefined') return 'server';
+  return `client_${Math.random().toString(36).substring(2, 15)}`;
+};
+
+// 시간 형식 포맷팅 함수 추가
+const formatTimeStr = (): string => {
+  const now = new Date();
+  const hours = now.getHours().toString().padStart(2, '0');
+  const minutes = now.getMinutes().toString().padStart(2, '0');
+  const seconds = now.getSeconds().toString().padStart(2, '0');
+  return `${hours}:${minutes}:${seconds}`;
+};
+
+// 시스템 상태 저장 및 불러오기 함수 개선
+const saveState = async (stateToSave: any) => {
+  try {
+    // 로컬 스토리지에 상태 저장
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
+      
+      // IndexedDB에도 저장
+      if (typeof saveToIndexedDB === 'function') {
+        saveToIndexedDB(stateToSave);
+      }
+      
+      // 다른 탭/창에 상태 변경 알림
+      localStorage.setItem('tankSystemStateUpdate', Date.now().toString());
+    }
+  } catch (error) {
+    console.error('상태 저장 실패:', error);
+  }
+};
+
+// IndexedDB에 상태 저장
+const saveToIndexedDB = (state: any) => {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    console.warn('IndexedDB를 사용할 수 없습니다.');
+    return;
+  }
+  
+  try {
+    const request = window.indexedDB.open('TankSystemDB', 1);
+    
+    request.onupgradeneeded = function(event) {
+      try {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('systemState')) {
+          db.createObjectStore('systemState', { keyPath: 'id' });
+        }
+      } catch (error) {
+        console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+        // 오류가 발생해도 계속 진행
+      }
+    };
+    
+    request.onsuccess = function(event) {
+      try {
+        const db = request.result;
+        const transaction = db.transaction(['systemState'], 'readwrite');
+        const store = transaction.objectStore('systemState');
+        
+        // 항상 같은 키로 저장하여 최신 상태만 유지
+        const putRequest = store.put({
+          id: 'currentState',
+          data: state,
+          timestamp: Date.now()
+        });
+        
+        putRequest.onsuccess = function() {
+          console.log('IndexedDB에 상태 저장 성공');
+        };
+        
+        putRequest.onerror = function(event) {
+          console.warn('IndexedDB 데이터 저장 중 오류:', event);
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+        
+        transaction.onerror = function(event) {
+          console.warn('IndexedDB 트랜잭션 오류:', event);
+        };
+      } catch (error) {
+        console.error('IndexedDB 트랜잭션 생성 중 오류:', error);
+      }
+    };
+    
+    request.onerror = function(event) {
+      console.warn('IndexedDB 열기 오류:', event);
+    };
+  } catch (error) {
+    console.error('IndexedDB 접근 중 예상치 못한 오류:', error);
+  }
+};
+
+// 상태 불러오기 함수 개선
+const loadState = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storedState = localStorage.getItem('tankSystemState');
+      
+      if (storedState) {
         return JSON.parse(storedState);
       }
       
@@ -334,6 +1208,540 @@ export default function TankSystem({
 
   // 진행 상태 정보 저장 (펌프 ID별)
   const [pumpProgressInfo, setPumpProgressInfo] = useState<Record<number, ProcessProgress>>({});
+  const [isResetDragging, setIsResetDragging] = useState<Record<number, boolean>>({});
+  const [dragStartPos, setDragStartPos] = useState<{x: number, y: number}>({x: 0, y: 0});
+  const [isPumpDragging, setIsPumpDragging] = useState<Record<number, boolean>>({});
+  const [pumpClickStatus, setPumpClickStatus] = useState<Record<number, boolean>>({});
+  const [isPumpHolding, setIsPumpHolding] = useState<number | null>(null);
+  const pumpHoldTimer = useRef<number | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [lastProcessedMessage, setLastProcessedMessage] = useState<string>('');
+  const [extractionStarted, setExtractionStarted] = useState<boolean>(false);
+  const [extractionCompleteMessage, setExtractionCompleteMessage] = useState<string>("");
+  const [automationStatus, setAutomationStatus] = useState<string>("");
+  const [automationProgress, setAutomationProgress] = useState<string>("");
+  const [automationWaitTime, setAutomationWaitTime] = useState<{value: number, endTime?: number} | null>(null);
+  const [lastProgressPercent, setLastProgressPercent] = useState<number>(0); // 진행률 상태 추가
+
+  // 파이프 활성화 상태 관리
+  const [pipeActiveStatus, setPipeActiveStatus] = useState<Record<number, boolean>>({});
+
+  // 진행 정보 메시지 파싱 함수 - extwork/extraction/progress 토픽용
+  const parseProgressMessage = (messageStr: string): ProcessProgress | null => {
+    try {
+      // JSON 파싱 시도
+      if (messageStr.startsWith('{') && messageStr.endsWith('}')) {
+        const progressData = JSON.parse(messageStr);
+        
+        // 기본 필드 확인
+        if (progressData.elapsed_time && progressData.remaining_time) {
+          // 경과 시간과 남은 시간을 초 단위로 파싱
+          const elapsedStr = progressData.elapsed_time.replace('s', '');
+          const remainingStr = progressData.remaining_time.replace('s', '');
+          const elapsed = parseInt(elapsedStr, 10);
+          const remaining = parseInt(remainingStr, 10);
+          
+          // 기본 프로그레스 정보 객체
+          const progress: ProcessProgress = {
+            mode: '',
+            elapsed_time: elapsed,
+            remaining_time: remaining,
+            total_repeats: 1,
+            current_repeat: 0,
+            pump_id: undefined
+          };
+          
+          // 모드 정보 파싱
+          if (progressData.mode) {
+            progress.mode = progressData.mode;
+          } else if (messageStr.includes('동시모드')) {
+            progress.mode = '동시모드';
+          } else if (messageStr.includes('순차모드')) {
+            progress.mode = '순차모드';
+          } else if (messageStr.includes('오버랩모드')) {
+            progress.mode = '오버랩모드';
+          }
+          
+          // 반복 횟수 정보 파싱 - 동시모드
+          if (progress.mode === '동시모드' && progressData.process_info) {
+            const processMatch = progressData.process_info.match(/S\((\d+)\/(\d+)\)/);
+            if (processMatch) {
+              progress.current_repeat = parseInt(processMatch[1], 10);
+              progress.total_repeats = parseInt(processMatch[2], 10) || 1; // 0이면 1로 처리
+            }
+          }
+          
+          // 펌프 ID 및 반복 횟수 파싱 - 순차모드 & 오버랩모드
+          if ((progress.mode === '순차모드' || progress.mode === '오버랩모드') && progressData.pump_id) {
+            // 정확한 패턴 매칭: "1(0/9)" 형식
+            const pumpMatch = progressData.pump_id.match(/(\d+)\((\d+)\/(\d+)\)/);
+            if (pumpMatch) {
+              progress.pump_id = pumpMatch[1]; // 펌프 ID (예: "1")
+              
+              // 순차 모드 개선: 정확한 현재 반복 횟수와 총 반복 횟수 계산
+              progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수 (예: 0)
+              
+              // 총 반복 횟수 처리 - 0부터 시작하므로 +1
+              const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+              progress.total_repeats = totalRepeats || 1; // 총 반복 횟수가 0이면 1로 설정
+              
+              console.log(`펌프 ${progress.pump_id} 진행 정보 파싱: 현재 ${progress.current_repeat+1}/${progress.total_repeats} 회 (${((progress.current_repeat/progress.total_repeats)*100).toFixed(1)}% 진행)`);
+            }
+          }
+          
+          return progress;
+        }
+      }
+      
+      // 텍스트 형식으로 된 메시지 파싱 시도 (비 JSON 형식)
+      const elapsedMatch = messageStr.match(/경과:\s*(\d+)s/) || messageStr.match(/elapsed_time":\s*"(\d+)s/);
+      const remainingMatch = messageStr.match(/남은:\s*(\d+)s/) || messageStr.match(/remaining_time":\s*"(\d+)s/);
+      
+      if (elapsedMatch && remainingMatch) {
+        const elapsed = parseInt(elapsedMatch[1], 10);
+        const remaining = parseInt(remainingMatch[1], 10);
+        
+        // 기본 프로그레스 정보 객체
+        const progress: ProcessProgress = {
+          mode: '',
+          elapsed_time: elapsed,
+          remaining_time: remaining,
+          total_repeats: 1,
+          current_repeat: 0,
+          pump_id: undefined
+        };
+        
+        // 모드 정보 파싱
+        if (messageStr.includes('동시모드')) {
+          progress.mode = '동시모드';
+          // 동시모드 반복 횟수 정보 파싱
+          const processMatch = messageStr.match(/S\((\d+)\/(\d+)\)/);
+          if (processMatch) {
+            progress.current_repeat = parseInt(processMatch[1], 10);
+            progress.total_repeats = parseInt(processMatch[2], 10) || 1; // 0이면 1로 처리
+          }
+        } else if (messageStr.includes('순차모드')) {
+          progress.mode = '순차모드';
+          
+          // 순차모드 펌프 ID 및 반복 횟수 파싱 - 개선된 정규식
+          const pumpMatch = messageStr.match(/펌프\s*(\d+)\s*\((\d+)\/(\d+)\)/) || 
+                            messageStr.match(/(\d+)\((\d+)\/(\d+)\)/);
+          
+          if (pumpMatch) {
+            progress.pump_id = pumpMatch[1]; // 펌프 ID
+            progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수
+            
+            // 총 반복 횟수 처리 - 0이면 1로 설정 (100% 채워짐)
+            const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+            progress.total_repeats = totalRepeats || 1;
+            
+            console.log(`[텍스트] 펌프 ${progress.pump_id} 순차모드 진행 정보: ${progress.current_repeat+1}/${progress.total_repeats} 회`);
+          }
+        } else if (messageStr.includes('오버랩모드')) {
+          progress.mode = '오버랩모드';
+          
+          // 오버랩모드 펌프 ID 및 반복 횟수 파싱 - 개선된 정규식
+          const pumpMatch = messageStr.match(/펌프\s*(\d+)\s*\((\d+)\/(\d+)\)/) || 
+                            messageStr.match(/(\d+)\((\d+)\/(\d+)\)/);
+                          
+          if (pumpMatch) {
+            progress.pump_id = pumpMatch[1]; // 펌프 ID
+            progress.current_repeat = parseInt(pumpMatch[2], 10); // 현재 반복 횟수
+            
+            // 총 반복 횟수 처리 - 0이면 1로 설정 (100% 채워짐)
+            const totalRepeats = parseInt(pumpMatch[3], 10) + 1; // 0부터 시작하므로 +1
+            progress.total_repeats = totalRepeats || 1;
+            
+            console.log(`[텍스트] 펌프 ${progress.pump_id} 오버랩모드 진행 정보: ${progress.current_repeat+1}/${progress.total_repeats} 회`);
+          }
+        }
+        
+        return progress;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('진행 정보 파싱 오류:', error);
+      return null;
+    }
+  };
+
+  // 애니메이션을 위한 상태 추가
+  const [fillPercentage, setFillPercentage] = useState(0);
+  
+  // 길게 누르기 감지를 위한 타이머 상태 추가
+  const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null);
+  const [currentPressedPump, setCurrentPressedPump] = useState<number | null>(null);
+  
+  // 클라이언트 ID 상태 추가
+  const clientId = useRef(generateClientId());
+  
+  // 마지막 상태 업데이트 시간
+  const [lastStateUpdate, setLastStateUpdate] = useState<Date | null>(null);
+  
+  // 연결 상태 추가
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
+    connected: false,
+    lastConnected: null,
+    reconnecting: false
+  });
+  
+  // 상태 변경 알림을 위한 상태 업데이트 - SystemNotification 타입 사용
+  const [notifications, setNotifications] = useState<SystemNotification[]>([]);
+
+  // 알림 추가 함수 
+  const addNotification = (message: string, type: 'info' | 'warning' | 'error' = 'info', pumpId?: number) => {
+    const notification: SystemNotification = {
+      message,
+      timestamp: Date.now(),
+      type,
+      pumpId,
+      source: '시스템'
+    };
+    
+import { motion } from "framer-motion"
+import { useEffect, useState, useRef, useCallback } from "react"
+import { MqttClient } from "mqtt"
+import { cn } from '@/lib/utils';
+import "./tank-system.css"; // 새로 생성한 CSS 파일 import
+import { PROCESS_PROGRESS_TOPIC, AUTOMATION_STATUS_TOPIC } from "@/lib/mqtt-topics"; // MQTT 토픽 import
+import { Tank } from '@/interface/tank'; // Tank 인터페이스만 임포트
+
+// 고유 클라이언트 ID 생성 함수
+const generateClientId = () => {
+  if (typeof window === 'undefined') return 'server';
+  return `client_${Math.random().toString(36).substring(2, 15)}`;
+};
+
+// 시스템 상태 저장 및 불러오기 함수 개선
+const saveState = async (stateToSave: any) => {
+  try {
+    // 로컬 스토리지에 상태 저장
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tankSystemState', JSON.stringify(stateToSave));
+      
+      // API 호출 비활성화 - 서버 API 대신 로컬 스토리지만 사용
+      console.log('서버 API 호출 대신 로컬 스토리지에만 저장합니다.');
+      
+      // IndexedDB에도 저장
+      if (typeof saveToIndexedDB === 'function') {
+        saveToIndexedDB(stateToSave);
+      }
+      
+      // 다른 탭/창에 상태 변경 알림
+      localStorage.setItem('tankSystemStateUpdate', Date.now().toString());
+    }
+  } catch (error) {
+    console.error('상태 저장 실패:', error);
+  }
+};
+
+// IndexedDB에 상태 저장
+const saveToIndexedDB = (state: any) => {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    console.warn('IndexedDB를 사용할 수 없습니다.');
+    return;
+  }
+  
+  try {
+    const request = window.indexedDB.open('TankSystemDB', 1);
+    
+    request.onupgradeneeded = function(event) {
+      try {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('systemState')) {
+          db.createObjectStore('systemState', { keyPath: 'id' });
+        }
+      } catch (error) {
+        console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+        // 오류가 발생해도 계속 진행
+      }
+    };
+    
+    request.onsuccess = function(event) {
+      try {
+        const db = request.result;
+        const transaction = db.transaction(['systemState'], 'readwrite');
+        const store = transaction.objectStore('systemState');
+        
+        // 항상 같은 키로 저장하여 최신 상태만 유지
+        const putRequest = store.put({
+          id: 'currentState',
+          data: state,
+          timestamp: Date.now()
+        });
+        
+        putRequest.onsuccess = function() {
+          console.log('IndexedDB에 상태 저장 성공');
+        };
+        
+        putRequest.onerror = function(event) {
+          console.warn('IndexedDB 데이터 저장 중 오류:', event);
+        };
+        
+        transaction.oncomplete = function() {
+          db.close();
+        };
+        
+        transaction.onerror = function(event) {
+          console.warn('IndexedDB 트랜잭션 오류:', event);
+        };
+      } catch (error) {
+        console.error('IndexedDB 트랜잭션 생성 중 오류:', error);
+      }
+    };
+    
+    request.onerror = function(event) {
+      console.warn('IndexedDB 열기 오류:', event);
+    };
+  } catch (error) {
+    console.error('IndexedDB 접근 중 예상치 못한 오류:', error);
+  }
+};
+
+// 상태 불러오기 함수 개선
+const loadState = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storedState = localStorage.getItem('tankSystemState');
+      
+      if (storedState) {
+        return JSON.parse(storedState);
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('상태 불러오기 실패:', error);
+      return null;
+    }
+  }
+  
+  return null;
+};
+
+// 서버에서 초기 상태 불러오기
+const loadInitialState = async (): Promise<any> => {
+  if (typeof window !== 'undefined') {
+    try {
+      // 서버 API에서 상태 가져오기
+      if (window.navigator.onLine) {
+        try {
+          console.log('서버에서 최신 상태 불러오기 시도...');
+          console.log('API 호출 대신 로컬 스토리지만 사용합니다.');
+        } catch (serverError) {
+          console.error('서버에서 상태 불러오기 실패:', serverError);
+          // 서버 오류 시 계속 진행 - 로컬 저장소 사용
+        }
+      }
+      
+      // 서버에서 불러오기 실패 시 로컬 스토리지에서 불러오기 시도
+      try {
+        const localState = loadState();
+        if (localState) {
+          console.log('로컬 스토리지에서 상태를 불러왔습니다.');
+          return localState;
+        }
+      } catch (localError) {
+        console.error('로컬 스토리지에서 상태 불러오기 실패:', localError);
+        // 로컬 스토리지 오류 시 계속 진행 - IndexedDB 사용
+      }
+      
+      // IndexedDB에서 불러오기 시도
+      try {
+        const idbState = await loadFromIndexedDB();
+        if (idbState) {
+          console.log('IndexedDB에서 상태를 불러왔습니다.');
+          return idbState;
+        }
+      } catch (idbError) {
+        console.error('IndexedDB에서 상태 불러오기 실패:', idbError);
+        // IndexedDB 오류 시 기본값 사용
+      }
+    } catch (error) {
+      console.error('초기 상태 불러오기 전체 프로세스 실패:', error);
+      // 모든 오류 시 기본값 사용
+    }
+  }
+  
+  console.log('사용 가능한 저장된 상태가 없습니다. 기본값 사용.');
+  return null;
+};
+
+// IndexedDB에서 상태 불러오기 (Promise 반환)
+const loadFromIndexedDB = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      console.warn('IndexedDB를 사용할 수 없습니다.');
+      resolve(null);
+      return;
+    }
+    
+    try {
+      const request = window.indexedDB.open('TankSystemDB', 1);
+      
+      request.onupgradeneeded = function(event) {
+        try {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('systemState')) {
+            db.createObjectStore('systemState', { keyPath: 'id' });
+          }
+        } catch (error) {
+          console.error('IndexedDB 스키마 업그레이드 중 오류:', error);
+          // 업그레이드 오류가 발생해도 계속 진행 가능하도록 함
+        }
+      };
+      
+      request.onsuccess = function(event) {
+        try {
+          const db = request.result;
+          const transaction = db.transaction(['systemState'], 'readonly');
+          const store = transaction.objectStore('systemState');
+          const getRequest = store.get('currentState');
+          
+          getRequest.onsuccess = function() {
+            if (getRequest.result) {
+              resolve(getRequest.result.data);
+            } else {
+              console.log('IndexedDB에 저장된 상태가 없습니다.');
+              resolve(null);
+            }
+          };
+          
+          getRequest.onerror = function(event) {
+            console.warn('IndexedDB 읽기 오류:', event);
+            resolve(null); // 오류 발생 시에도 null을 반환하여 앱이 계속 실행되도록 함
+          };
+          
+          transaction.oncomplete = function() {
+            db.close();
+          };
+        } catch (error) {
+          console.error('IndexedDB 트랜잭션 중 오류:', error);
+          resolve(null);
+        }
+      };
+      
+      request.onerror = function(event) {
+        console.warn('IndexedDB 접근 오류:', event);
+        resolve(null); // reject 대신 resolve(null)을 사용하여 앱이 계속 실행되도록 함
+      };
+    } catch (error) {
+      console.error('IndexedDB 사용 중 예상치 못한 오류:', error);
+      resolve(null); // 모든 예외 상황에서도 앱이 계속 실행되도록 함
+    }
+  });
+};
+
+interface TankSystemProps {
+  tankData: {
+    mainTank: {
+      level: number
+      status: string
+    }
+    tanks: Tank[]
+    valveState: string
+    valveStatusMessage?: string
+    valveADesc?: string  // 밸브 A 설명 추가
+    valveBDesc?: string  // 밸브 B 설명 추가
+    tankMessages?: Record<number, string>
+    mainTankMessage?: string
+    progressInfo?: {
+      step: string
+      elapsedTime: string
+      remainingTime: string
+      totalRemainingTime: string
+    }
+  }
+  onValveChange: (newState: string) => void
+  onPumpToggle?: (pumpId: number) => void  // 펌프 토글 함수
+  onPumpReset?: (pumpId: number) => void   // 펌프 리셋 함수
+  onPumpKCommand?: (pumpId: number) => void // 펌프 K 명령 함수
+  // onExtractionCommand 속성 제거됨
+  pumpStateMessages?: Record<number, string> // 펌프 상태 메시지
+  mqttClient?: MqttClient // MQTT 클라이언트 추가
+  kButtonActive?: boolean // K 버튼 활성화 여부
+  pumpMessages?: Record<number, string> // 펌프 메시지
+  progressMessages?: Array<{timestamp: number, message: string, rawJson?: string | null}> // 진행 메시지 추가
+  setProgressMessages?: (messages: Array<{timestamp: number, message: string, rawJson?: string | null}> | ((prev: Array<{timestamp: number, message: string, rawJson?: string | null}>) => Array<{timestamp: number, message: string, rawJson?: string | null}>)) => void // 진행 메시지 업데이트 함수 추가
+}
+
+// 추출 진행 메시지를 위한 인터페이스
+interface ExtractionProgress {
+  timestamp: number
+  message: string
+}
+
+// 연결 상태를 위한 인터페이스
+interface ConnectionStatus {
+  connected: boolean
+  lastConnected: Date | null
+  reconnecting: boolean
+}
+
+// 펄스 애니메이션을 위한 스타일 추가
+const pulseCss = `
+  @keyframes pulse {
+    0% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.8;
+    }
+    100% {
+      opacity: 0.6;
+    }
+  }
+`;
+
+export default function TankSystem({ 
+  tankData, 
+  onValveChange, 
+  progressMessages = [], 
+  onPumpToggle, 
+  onPumpReset,
+  onPumpKCommand,
+  pumpStateMessages = {},
+  mqttClient,
+  // onExtractionCommand 속성 제거됨
+  kButtonActive,
+  pumpMessages,
+  setProgressMessages
+}: TankSystemProps) {
+  // 고유 클라이언트 ID 생성 함수
+  const generateClientId = () => {
+    if (typeof window === 'undefined') return 'server';
+    return `client_${Math.random().toString(36).substring(2, 15)}`;
+  };
+
+  // MQTT 토픽에서 진행 정보 파싱을 위한 인터페이스 추가
+  interface ProcessProgress {
+    mode: string;             // 작동 모드 (동시모드, 순차모드, 오버랩모드)
+    elapsed_time: number;     // 경과 시간 (초)
+    remaining_time: number;   // 남은 시간 (초)
+    total_repeats: number;    // 총 반복 횟수 
+    current_repeat: number;   // 현재 반복 횟수
+    pump_id?: string;         // 펌프 ID (순차모드, 오버랩모드에서 사용)
+  }
+
+  // 진행 상태 정보 저장 (펌프 ID별)
+  const [pumpProgressInfo, setPumpProgressInfo] = useState<Record<number, ProcessProgress>>({});
+  const [isResetDragging, setIsResetDragging] = useState<Record<number, boolean>>({});
+  const [dragStartPos, setDragStartPos] = useState<{x: number, y: number}>({x: 0, y: 0});
+  const [isPumpDragging, setIsPumpDragging] = useState<Record<number, boolean>>({});
+  const [pumpClickStatus, setPumpClickStatus] = useState<Record<number, boolean>>({});
+  const [isPumpHolding, setIsPumpHolding] = useState<number | null>(null);
+  const pumpHoldTimer = useRef<number | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [lastProcessedMessage, setLastProcessedMessage] = useState<string>('');
+  const [extractionStarted, setExtractionStarted] = useState<boolean>(false);
+  const [extractionCompleteMessage, setExtractionCompleteMessage] = useState<string>("");
+  const [automationStatus, setAutomationStatus] = useState<string>("");
+  const [automationProgress, setAutomationProgress] = useState<string>("");
+  const [automationWaitTime, setAutomationWaitTime] = useState<{value: number, endTime?: number} | null>(null);
+  const [lastProgressPercent, setLastProgressPercent] = useState<number>(0); // 진행률 상태 추가
+
+  // 파이프 활성화 상태 관리
+  const [pipeActiveStatus, setPipeActiveStatus] = useState<Record<number, boolean>>({});
 
   // 진행 정보 메시지 파싱 함수 - extwork/extraction/progress 토픽용
   const parseProgressMessage = (messageStr: string): ProcessProgress | null => {
@@ -624,18 +2032,6 @@ export default function TankSystem({
           console.log(`추출 입력 명령 수신: ${messageStr}`);
           
           try {
-            // 메시지 유효성 검사 추가
-            if (!messageStr || messageStr.trim() === '') {
-              throw new Error("빈 메시지 입니다");
-            }
-            
-            // 'next'와 같은 유효하지 않은 JSON 문자열 필터링
-            if (messageStr.trim() === 'next' || !messageStr.trim().startsWith('{')) {
-              console.log('JSON 형식이 아닌 메시지 수신:', messageStr);
-              addNotification(`JSON 형식이 아닌 메시지: ${messageStr}`, 'warning');
-              return;
-            }
-            
             // JSON 데이터 파싱 시도
             const jsonData = JSON.parse(messageStr);
             
@@ -643,23 +2039,10 @@ export default function TankSystem({
             const timeStr = formatTimeStr();
             const displayMessage = `새 공정 명령 수신: ${jsonData.name || jsonData.sequences?.[0]?.name || 'JSON 명령'} (${timeStr})`;
             
-            // 별도 상태로 저장 (active = true로 설정)
-            setExtractionCommand({
-              timestamp: Date.now(),
-              message: displayMessage,
-              rawJson: messageStr,
-              active: true
-            });
-            
-            // 로컬 스토리지에도 저장 (영구 보존)
-            localStorage.setItem('lastExtractionCommand', messageStr);
-            localStorage.setItem('lastExtractionTimestamp', Date.now().toString());
-            localStorage.setItem('extractionCommandActive', 'true');
-            
             // 알림 추가
             addNotification(`새 공정 명령이 수신되었습니다: ${jsonData.name || jsonData.sequences?.[0]?.name || 'JSON 명령'}`, 'info');
             
-            // 기존 progress 메시지 업데이트도 유지
+            // progress 메시지 업데이트 - rawJson 필드에 원본 JSON 데이터 저장
             if (setProgressMessages) {
               setProgressMessages(prev => [{
                 timestamp: Date.now(),
@@ -668,9 +2051,10 @@ export default function TankSystem({
               }, ...prev]);
             }
             
+            // 로그 출력
             console.log(`추출 명령 처리됨: ${displayMessage}`);
           } catch (parseError) {
-            console.error('추출 입력 명령 파싱 오류:', parseError, '원본 메시지:', messageStr);
+            console.error('추출 입력 명령 파싱 오류:', parseError);
             
             // 파싱 실패해도 알림은 띄워줌
             addNotification('추출 명령을 수신했지만 처리할 수 없습니다. 형식을 확인해주세요.', 'error');
@@ -679,7 +2063,7 @@ export default function TankSystem({
             if (setProgressMessages) {
               setProgressMessages(prev => [{
                 timestamp: Date.now(),
-                message: `오류: 수신된 명령의 JSON 형식이 잘못되었습니다. [${messageStr.substring(0, 20)}${messageStr.length > 20 ? '...' : ''}]`,
+                message: `오류: 수신된 명령의 JSON 형식이 잘못되었습니다.`,
                 rawJson: null
               }, ...prev]);
             }
@@ -800,10 +2184,6 @@ export default function TankSystem({
                 [tankId]: displayMessage
               };
               console.log(`탱크 ${tankId} 메시지 업데이트: "${displayMessage}"`);
-              
-              // 원본 메시지를 localStorage에 저장하여 다음 갱신까지 유지
-              localStorage.setItem(`tank_${tankId}_last_message`, messageStr);
-              console.log(`원본 메시지 저장: tank_${tankId}_last_message = "${messageStr}"`);
               
               // 텍스트 박스용 메시지 저장
               localStorage.setItem(`tank_${tankId}_message`, displayMessage);
@@ -1547,21 +2927,12 @@ export default function TankSystem({
     if (tankId === 0 && mainTankMessage) {
       return mainTankMessage;
     }
-
-    // tankId가 유효한 경우 이전에 저장된 메시지가 있는지 확인
-    if (tankId !== undefined) {
-      const savedMessage = localStorage.getItem(`tank_${tankId}_last_message`);
-      if (savedMessage) {
-        return savedMessage;
-      }
-    }
-
     // 기본 탱크 상태 메시지 로직
     switch (status) {
       case "full":
         return "가득채워짐";
       case "empty":
-        return "준비중"; // 초기값을 "준비중"으로 변경
+        return level <= 5 ? "비어있음(5%미만)" : "5% 이상 잔여";
       case "filling":
         return `채워지는 중 (${Math.round(fillPercentage)}%)`;
       default:
@@ -2410,20 +3781,6 @@ export default function TankSystem({
           setProcessRunning(false);
           localStorage.setItem('process-running-state', JSON.stringify({ running: false }));
           console.log('프로세스 완료 감지, 상태 초기화');
-          
-          // extractionCommand 상태 초기화 (공정 계획 요약 초기화용)
-          setExtractionCommand({
-            timestamp: Date.now(),
-            message: "준비중",
-            rawJson: null,
-            active: false
-          });
-          
-          // 로컬 스토리지에도 비활성 상태로 저장
-          localStorage.setItem('extractionCommandActive', 'false');
-          
-          // 공정 종료 알림 추가
-          addNotification("공정이 종료되었습니다.", 'info');
         }
       } else if (topic === 'extwork/automation/control') {
         const messageStr = message.toString();
@@ -2929,7 +4286,7 @@ export default function TankSystem({
     // 탱크 메시지 가져오기 - 모든 메시지 (텍스트 박스용)
     const tankMessage = tankData?.tankMessages?.[tankId];
     
-    // 퀴즈 안전하게 operationTime 접근
+    // 타입 안전하게 operationTime 접근
     const operationTime = tankData1 ? (tankData1 as any).operationTime : undefined;
     
     // 펌프 상태 확인 및 채워진 비율 계산 (직접 계산)
@@ -3333,94 +4690,6 @@ export default function TankSystem({
       // 필요한 경우 클린업 로직
     };
   }, [pumpProgressInfo]); // pumpProgressInfo가 변경될 때만 실행
-
-  useEffect(() => {
-    if (!mqttClient) {
-      // MQTT 클라이언트 연결 안 된 상태
-      console.log('MQTT 클라이언트가 연결되지 않았습니다. 초기 상태로 설정합니다.');
-      
-      // 초기 탱크 메시지 설정 - "준비중"으로 설정하고 localStorage에 저장된 이전 메시지 복원
-      setTankMessages(prev => {
-        const initialMessages = { ...prev };
-        
-        // 모든 탱크 메시지를 "준비중"으로 초기화
-        for (let i = 1; i <= 6; i++) {
-          // localStorage에서 저장된 메시지 확인
-          const savedMessage = localStorage.getItem(`tank_${i}_message`);
-          
-          if (savedMessage) {
-            // 저장된 메시지가 있으면 사용
-            initialMessages[i] = savedMessage;
-            console.log(`탱크 ${i} 메시지 복원: "${savedMessage}"`);
-          } else {
-            // 저장된 메시지가 없으면 "준비중"으로 설정
-            initialMessages[i] = "준비중";
-            console.log(`탱크 ${i} 메시지 초기화: "준비중"`);
-          }
-        }
-        
-        return initialMessages;
-      });
-    }
-  }, [mqttClient]);
-
-  // MQTT 클라이언트 연결 상태 변경 시 실행
-  useEffect(() => {
-    // ... existing code ...
-  }, [mqttClient?.connected]);
-
-  // 탱크 구독 설정
-  useEffect(() => {
-    if (!mqttClient?.connected || !tankData?.tanks) return;
-    
-    // 자동 공급 상태 구독
-    // ... existing code ...
-  }, [mqttClient?.connected, tankData?.tanks]);
-
-  // 별도의 추출 명령 상태 추가 (컴포넌트 최상단 상태 부분에 추가)
-  const [extractionCommand, setExtractionCommand] = useState<{
-    timestamp: number;
-    message: string;
-    rawJson: string | null;
-    active: boolean;
-  } | null>(null);
-
-  // 공정 상태 감지를 위한 useEffect 추가 (컴포넌트에 새로운 useEffect 추가)
-  useEffect(() => {
-    // 공정 상태 확인 로직 (예: 모든 펌프가 OFF 상태인지)
-    const allPumpsOff = tankData?.tanks?.every(tank => tank.pumpStatus === "OFF");
-    
-    // 이전에 활성화된 명령이 있었고, 지금은 모든 펌프가 꺼져있다면 공정 완료로 판단
-    if (extractionCommand?.active && allPumpsOff) {
-      console.log('공정 완료 감지: 추출 명령 비활성화');
-      
-      // 비활성 상태로 업데이트 - 로컬에만 저장하고 서버에는 전송하지 않음
-      setExtractionCommand(prev => prev ? {...prev, active: false} : null);
-      
-      // 로컬 스토리지 업데이트
-      localStorage.setItem('extractionCommandActive', 'false');
-    }
-  }, [tankData?.tanks, extractionCommand?.active]);
-
-  // 컴포넌트 마운트 시 이전 명령 복원하는 useEffect 추가
-  useEffect(() => {
-    const storedCommand = localStorage.getItem('lastExtractionCommand');
-    const storedTimestamp = localStorage.getItem('lastExtractionTimestamp');
-    const isActive = localStorage.getItem('extractionCommandActive') === 'true';
-    
-    if (storedCommand && storedTimestamp) {
-      try {
-        setExtractionCommand({
-          timestamp: parseInt(storedTimestamp, 10),
-          message: `이전 공정 명령 (${new Date(parseInt(storedTimestamp, 10)).toLocaleString()})`,
-          rawJson: storedCommand,
-          active: isActive
-        });
-      } catch (error) {
-        console.error('저장된 명령 복원 중 오류:', error);
-      }
-    }
-  }, []);
 
   return (
     <div className="relative w-full h-[950px] bg-white rounded-lg shadow-sm overflow-hidden border border-gray-100">
@@ -4033,11 +5302,7 @@ export default function TankSystem({
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-2">
             <div className="bg-blue-50 py-1 px-2 text-xs font-semibold text-blue-700 rounded-t-lg border-b border-gray-200 flex justify-between items-center">
               <span>공정 진행 계획 요약</span>
-              {progressMessages.filter(msg => 
-                msg.rawJson && 
-                msg.rawJson.trim().startsWith('{') && 
-                !msg.rawJson.includes("process_info")
-              ).length > 0 && (
+              {progressMessages.filter(msg => msg.rawJson).length > 0 && (
                 <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[9px] font-bold animate-pulse">
                   활성
                 </span>
@@ -4046,142 +5311,415 @@ export default function TankSystem({
             <div className="p-2 text-xs">
               {/* 공정 계획 정보 표시 */}
               <div className="space-y-2">
-                {processRunning === false ? (
-                  <div className="bg-gray-50 p-2 rounded border border-gray-100 text-center">
-                    <span className="font-medium text-gray-500">준비중</span>
-                  </div>
-                ) : (
-                  progressMessages.filter(msg => 
-                    msg.rawJson && 
-                    msg.rawJson.trim().startsWith('{') && 
-                    !msg.rawJson.includes("process_info") && 
-                    !msg.rawJson.includes("extwork/extraction/progress")
-                  ).slice(0, 1).map((msg, idx) => {
-                    try {
-                      // 유효성 검사 추가
-                      if (!msg.rawJson || msg.rawJson.trim() === '') {
-                        throw new Error("JSON 데이터가 없습니다");
-                      }
-                      
-                      // 'next' 또는 유효하지 않은 형식의 문자열 필터링
-                      if (msg.rawJson.trim() === 'next' || !msg.rawJson.trim().startsWith('{')) {
-                        throw new Error(`유효하지 않은 JSON 형식: ${msg.rawJson.substring(0, 20)}`);
-                      }
-                      
-                      // JSON 파싱 시도
-                      const jsonData = msg.rawJson ? JSON.parse(msg.rawJson) : null;
-                      
-                      // 복합 명령어 처리 (sequences 배열이 있는 경우)
-                      if (jsonData?.sequences && Array.isArray(jsonData.sequences)) {
-                        return (
-                          <div key={`process-plan-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
-                            <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">복합 공정 계획</div>
-                            
-                            {jsonData.sequences.map((seq, seqIdx) => (
-                              <div key={`seq-${seqIdx}`} className="mb-2 p-1.5 bg-white rounded border border-gray-100">
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="font-semibold text-blue-700">시퀀스 {seqIdx + 1}:</span>
-                                  <span className="text-[9px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">
-                                    {seq.operation_mode ? `모드: ${seq.operation_mode}` : ''}
-                                  </span>
-                                </div>
-                                
-                                {/* 추가 정보 표시 */}
-                                <div className="grid grid-cols-2 gap-1 text-[9px]">
-                                  {seq.repeats !== undefined && (
-                                    <div>
-                                      <span className="font-semibold text-blue-700">반복:</span>{" "}
-                                      <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{seq.repeats}회</span>
-                                    </div>
-                                  )}
-                                  
-                                  {seq.wait_time !== undefined && (
-                                    <div>
-                                      <span className="font-semibold text-blue-700">대기:</span>{" "}
-                                      <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{seq.wait_time}초</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                            
-                            {/* 선택된 펌프 표시 */}
-                            {jsonData.selectedPumps && Array.isArray(jsonData.selectedPumps) && (
-                              <div className="mt-2">
-                                <div className="font-semibold text-blue-700 mb-1">선택된 펌프:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {jsonData.selectedPumps.map((selected, i) => {
-                                    const pumpId = selected ? (i + 1) : null;
-                                    if (!pumpId) return null;
-                                    return (
-                                      <span key={i} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
-                                        {pumpId}
-                                      </span>
-                                    );
-                                  }).filter(Boolean)}
-                                </div>
-                              </div>
-                            )}
-                            {jsonData?.estimated_completion_time && (
-                              <div className="mb-1 flex justify-between items-center">
-                                <span className="font-semibold text-blue-700">예상 종료:</span>{" "}
-                                <span className="bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-indigo-700">{jsonData.estimated_completion_time}</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
-                      
-                      // 단일 명령어 처리 (기존 방식 유지)
+                {/* 공정 계획 정보 표시 */}
+                {progressMessages.filter(msg => msg.rawJson).slice(0, 1).map((msg, idx) => {
+                  try {
+                    const jsonData = msg.rawJson ? JSON.parse(msg.rawJson) : null;
+                    
+                    // 복합 명령어 처리 (sequences 배열이 있는 경우)
+                    if (jsonData?.sequences && Array.isArray(jsonData.sequences)) {
                       return (
                         <div key={`process-plan-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
-                          <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">단일 공정 계획</div>
-                          <div className="grid grid-cols-2 gap-1 text-[9px]">
-                            {jsonData.name && (
-                              <div className="col-span-2">
-                                <span className="font-semibold text-blue-700">이름:</span>{" "}
-                                <span className="font-medium">{jsonData.name}</span>
-                              </div>
-                            )}
-                            {jsonData.repeats !== undefined && (
-                              <div>
-                                <span className="font-semibold text-blue-700">반복:</span>{" "}
-                                <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{jsonData.repeats}회</span>
-                              </div>
-                            )}
-                            {jsonData.operation_mode !== undefined && (
-                              <div>
-                                <span className="font-semibold text-blue-700">모드:</span>{" "}
-                                <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{jsonData.operation_mode}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    } catch (error) {
-                      console.error('JSON 파싱 오류:', error, msg.rawJson);
-                      return (
-                        <div className="text-red-500 bg-red-50 p-2 rounded border border-red-200">
-                          공정 명령 처리 중 오류가 발생했습니다.
-                          <div className="text-[9px] mt-1">오류: {error.message}</div>
-                          <div className="text-[8px] mt-1 text-gray-500 truncate">
-                            {msg.rawJson ? `원본: ${msg.rawJson.substring(0, 30)}${msg.rawJson.length > 30 ? '...' : ''}` : '데이터 없음'}
-                          </div>
+                          <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">복합 공정 계획</div>
+                          
+                          {jsonData.sequences.map((seq, seqIdx) => (
+                            <div key={`seq-${seqIdx}`} className="mb-2 p-1.5 bg-white rounded border border-gray-100">
+                  <div className="flex justify-between items-center mb-1">
+                                <span className="font-semibold text-blue-700">시퀀스 {seqIdx + 1}:</span>
+                                <span className="text-[9px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">
+                                  {seq.operation_mode ? `모드: ${seq.operation_mode}` : ''}
+                                </span>
+                  </div>
+                              
+                              {seq.repeats !== undefined && (
+                                <div className="mb-1 flex justify-between items-center">
+                                  <span className="font-semibold text-blue-700">반복 횟수:</span>
+                                  <span className="bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">{seq.repeats}회</span>
+                  </div>
+                              )}
+                              
+                              {seq.process && Array.isArray(seq.process) && (
+                                <div className="mb-1">
+                                  <span className="font-semibold text-blue-700">프로세스:</span>
+                                  <div className="mt-1 flex flex-wrap gap-1">
+                                    {seq.process.map((proc, procIdx) => (
+                                      <span key={procIdx} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
+                                        {proc}
+                                      </span>
+                                    ))}
+                </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       );
                     }
-                  })
-                )}
-                {processRunning && progressMessages.filter(msg => 
-                    msg.rawJson && 
-                    msg.rawJson.trim().startsWith('{') && 
-                    !msg.rawJson.includes("process_info") && 
-                    !msg.rawJson.includes("extwork/extraction/progress")
-                  ).length === 0 && (
-                  <div className="bg-gray-50 p-2 rounded border border-gray-100 text-center">
-                    <span className="font-medium text-gray-500">데이터 없음</span>
+                    
+                    // 일반 명령어 처리
+                    return (
+                      <div key={`process-info-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
+                        {jsonData?.name && (
+                          <div className="mb-1 flex justify-between items-center">
+                            <span className="font-semibold text-blue-700">공정 이름:</span>{" "}
+                            <span className="bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{jsonData.name}</span>
+              </div>
+                        )}
+                        {jsonData?.mode && (
+                          <div className="mb-1 flex justify-between items-center">
+                            <span className="font-semibold text-blue-700">운영 모드:</span>{" "}
+                            <span className={`px-2 py-0.5 rounded border ${
+                              jsonData.mode === "sequential" ? "bg-purple-50 border-purple-100 text-purple-700" : 
+                              jsonData.mode === "concurrent" ? "bg-green-50 border-green-100 text-green-700" : 
+                              jsonData.mode === "mixed" ? "bg-yellow-50 border-yellow-100 text-yellow-700" : 
+                              "bg-gray-50 border-gray-100"
+                            }`}>
+                              {jsonData.mode === "sequential" ? "순차 모드" : 
+                                  jsonData.mode === "concurrent" ? "동시 모드" : 
+                              jsonData.mode === "mixed" ? "혼합 모드" : jsonData.mode}
+                            </span>
+              </div>
+                        )}
+                        {jsonData?.repeat !== undefined && (
+                          <div className="mb-1 flex justify-between items-center">
+                            <span className="font-semibold text-blue-700">반복 횟수:</span>{" "}
+                            <span className="bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{jsonData.repeat}회</span>
+                      </div>
+                        )}
+                        {jsonData?.sequences && (
+                          <div className="mb-1">
+                            <span className="font-semibold text-blue-700">활성화될 펌프:</span>{" "}
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {jsonData.sequences.map((seq: any, i: number) => {
+                                const pumpId = seq.pump_id || seq.pumpId;
+                                if (!pumpId) return null;
+                                return (
+                                  <span key={i} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
+                                    {pumpId}
+                            </span>
+                                );
+                              }).filter(Boolean)}
+                            </div>
+                  </div>
+                        )}
+                        {jsonData?.estimated_completion_time && (
+                          <div className="mb-1 flex justify-between items-center">
+                            <span className="font-semibold text-blue-700">예상 종료:</span>{" "}
+                            <span className="bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-indigo-700">{jsonData.estimated_completion_time}</span>
+                </div>
+                        )}
+              </div>
+                    );
+                  } catch (error) {
+                    return (
+                      <div key={`process-info-error-${idx}`} className="text-red-500 bg-red-50 p-2 rounded border border-red-200">
+                        공정 명령 처리 중 오류가 발생했습니다.
+                      </div>
+                    );
+                  }
+                })}
+                
+                {/* 명령이 없는 경우 안내 메시지 표시 */}
+                {progressMessages.filter(msg => msg.rawJson).length === 0 && (
+                  <div className="text-gray-500 bg-gray-50 border border-gray-200 italic text-center p-3 rounded">
+                    <div className="text-[10px] mb-1">공정 명령이 없습니다</div>
+                    <div className="text-[9px]">extwork/extraction/input 토픽으로 JSON 명령을 보내주세요</div>
                   </div>
                 )}
+                
+                {/* 채움 비율 진행 바 - 애니메이션 적용 */}
+                <div className="mb-2 mt-3 pt-2 border-t border-gray-200">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-semibold">진행 상태:</span>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                      fillPercentage >= 90 ? 'bg-green-100 text-green-800' :
+                      fillPercentage >= 60 ? 'bg-blue-100 text-blue-800' :
+                      fillPercentage >= 30 ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 repetition 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
+                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            if (jsonData.repetition_count && jsonData.repetition) {
+                              return `${jsonData.repetition_count - jsonData.repetition}회 남음`;
+                            }
+                          }
+                        } catch (e) {
+                          console.error('Repetition parsing error:', e);
+                        }
+                        return `${Math.floor(fillPercentage)}%`;
+                      })()}
+                    </span>
+                  </div>
+                  
+                  {/* 원형 그래프 추가 */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="w-16 h-16 relative">
+                      <svg viewBox="0 0 36 36" className="w-full h-full">
+                        {/* 배경 원 */}
+                        <circle 
+                          cx="18" 
+                          cy="18" 
+                          r="15.9" 
+                          fill="none" 
+                          stroke="#eeeeee" 
+                          strokeWidth="3"
+                        />
+                        
+                        {/* 진행 원 */}
+                        {(() => {
+                          // 기본값 대신 동적 진행률 계산
+                          let percent = 0;
+
+                          // 최신 JSON 데이터에서 진행 정보 찾기
+                          try {
+                            const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                            if (latestJsonMsg && latestJsonMsg.rawJson) {
+                              const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                              // process_time과 total_remaining으로 진행률 계산
+                              if (jsonData.process_time && jsonData.total_remaining) {
+                                const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
+                                const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
+                                
+                                if (totalTime > 0 && totalRemaining >= 0) {
+                                  // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
+                                  percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
+                                }
+                              }
+                            }
+                          } catch (e) {
+                            console.error('Progress calculation error:', e);
+                            // 에러 발생 시 기본값 유지
+                          }
+                          
+                          return (
+                            <>
+                              <circle 
+                                cx="18" 
+                                cy="18" 
+                                r="15.9" 
+                                fill="none" 
+                                stroke={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'} 
+                                strokeWidth="3" 
+                                strokeDasharray={`${percent}, 100`} 
+                                strokeDashoffset="25" 
+                                strokeLinecap="round" 
+                                className="transition-all duration-1000"
+                              />
+                              
+                              {/* 가운데 텍스트 */}
+                              <text 
+                                x="18" 
+                                y="18.5" 
+                                textAnchor="middle" 
+                                fontSize="10" 
+                                fontWeight="bold" 
+                                fill={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'}
+                              >
+                                {percent}%
+                              </text>
+                            </>
+                          );
+                        })()}
+                      </svg>
+                    </div>
+                    
+                    {/* 진행 상태 바를 개별로 분리하여 표시 */}
+                    <div className="space-y-1.5 flex-1 ml-2">
+                      {/* 현재 작업 진행률 바 - 대기중에도 항상 표시 */}
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 펌프 진행 정보 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
+                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            
+                            // 대기 상태인 경우 - 고정 값으로 표시
+                            if (jsonData.process_info === "waiting") {
+                              const pumpId = jsonData.pump_id || 0;
+                              return (
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(대기):</span>
+                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                    <div 
+                                      className="h-full bg-yellow-200 rounded-full"
+                                      style={{ width: '100%' }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-[9px] font-semibold text-yellow-700">대기중</span>
+                                </div>
+                              );
+                            }
+                            
+                            // 일반 작업 상태
+                            if (jsonData.pump_id) {
+                              const pumpMatch = String(jsonData.pump_id).match(/(\d+)\((\d+)\/(\d+)\)/);
+                              if (pumpMatch) {
+                                const pumpId = parseInt(pumpMatch[1], 10);
+                                const current = parseInt(pumpMatch[2], 10);
+                                const total = parseInt(pumpMatch[3], 10);
+                                if (!isNaN(current) && !isNaN(total) && total > 0) {
+                                  const pumpPercent = Math.min(100, Math.floor((current / total) * 100));
+                                  return (
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
+                                      <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                        <div 
+                                          className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
+                                          style={{ width: `${pumpPercent}%` }}
+                                        ></div>
+                                      </div>
+                                      <span className="text-[9px] font-semibold text-yellow-700">{pumpPercent}%</span>
+                                    </div>
+                                  );
+                                }
+                              } else if (typeof jsonData.pump_id === 'number') {
+                                // 펌프 ID가 숫자인 경우 - 단순히 펌프 번호만 표시
+                                const pumpId = jsonData.pump_id;
+                                return (
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
+                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div 
+                                        className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
+                                        style={{ width: '50%' }}
+                                      ></div>
+                                    </div>
+                                    <span className="text-[9px] font-semibold text-yellow-700">진행중</span>
+                                  </div>
+                                );
+                              }
+                            }
+                          }
+                        } catch (e) {
+                          console.error('Pump info parsing error:', e);
+                        }
+                        
+                        // 기본 상태 - 항상 표시되도록
+                        return (
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[10px] font-medium text-yellow-700 w-14">펌프(대기):</span>
+                            <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-yellow-200 rounded-full"
+                                style={{ width: '100%' }}
+                              ></div>
+                            </div>
+                            <span className="text-[9px] font-semibold text-yellow-700">미작동</span>
+                          </div>
+                        );
+                      })()}
+                      
+                      {/* 대기시간 카운터 그래프 */}
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 대기시간 정보 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
+                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            
+                            // 대기 상태인 경우에 대기시간 카운터 표시
+                            if (jsonData.process_info === "waiting" && jsonData.remaining_time !== undefined && jsonData.total_time !== undefined) {
+                              const remainingTime = parseInt(String(jsonData.remaining_time), 10);
+                              const totalTime = parseInt(String(jsonData.total_time), 10);
+                              
+                              if (!isNaN(remainingTime) && !isNaN(totalTime) && totalTime > 0) {
+                                const elapsedTime = totalTime - remainingTime;
+                                const waitPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / totalTime) * 100)));
+                                
+                                return (
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-[10px] font-medium text-blue-700 w-14">대기카운터:</span>
+                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div 
+                                        className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-in-out"
+                                        style={{ width: `${waitPercent}%` }}
+                                      ></div>
+                                    </div>
+                                    <span className="text-[9px] font-semibold text-blue-700">{remainingTime}초/{totalTime}초</span>
+                                  </div>
+                                );
+                              }
+                            }
+                          }
+                        } catch (e) {
+                          console.error('Wait counter parsing error:', e);
+                        }
+                        return null;
+                      })()}
+                      
+                      {/* 3. 대기시간 진행률 바 추가 */}
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 대기시간 정보 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
+                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
+                            
+                            // 자동화 대기시간 표시 (automationWaitTime이 있으면 대기시간 표시)
+                            if (automationWaitTime && automationWaitTime.value > 0) {
+                              // max 값이 없어서 초기값을 계산해서 사용
+                              const initialTime = automationWaitTime.endTime ? Math.ceil((automationWaitTime.endTime - Date.now() + automationWaitTime.value * 1000) / 1000) : 60;
+                              const waitPercent = Math.min(100, Math.max(0, Math.floor(((initialTime - automationWaitTime.value) / initialTime) * 100)));
+                              
+                              return (
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-[10px] font-medium text-purple-700 w-14">대기:</span>
+                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                    <div 
+                                      className="h-full bg-purple-500 rounded-full transition-all duration-1000 ease-in-out"
+                                      style={{ width: `${waitPercent}%` }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-[9px] font-semibold text-purple-700">{automationWaitTime.value}초</span>
+                                </div>
+                              );
+                            }
+                            
+                            // total_remaining이 있으면 대기시간으로 표시
+                            if (jsonData.total_remaining && jsonData.process_time) {
+                              const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
+                              const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
+                              
+                              if (totalTime > 0 && totalRemaining > 0) {
+                                const waitPercent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
+                                
+                                // 시간 단위 계산 (시:분:초 형식)
+                                const hours = Math.floor(totalRemaining / 3600);
+                                const minutes = Math.floor((totalRemaining % 3600) / 60);
+                                const seconds = totalRemaining % 60;
+                                
+                                // 시간 포맷팅 (시간이 있으면 시:분:초, 없으면 분:초)
+                                const timeDisplay = hours > 0 
+                                  ? `${hours}시 ${minutes}분 ${seconds}초`
+                                  : `${minutes}분 ${seconds}초`;
+                                
+                                return (
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-[10px] font-medium text-purple-700 w-14">공정 종료:</span>
+                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                      <div 
+                                        className="h-full bg-purple-500 rounded-full transition-all duration-1000 ease-in-out"
+                                        style={{ width: `${waitPercent}%` }}
+                                      ></div>
+                                    </div>
+                                    <span className="text-[9px] font-semibold text-purple-700">{timeDisplay}</span>
+                                  </div>
+                                );
+                              }
+                            }
+                          }
+                        } catch (e) {
+                          console.error('Wait time parsing error:', e);
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -4194,12 +5732,7 @@ export default function TankSystem({
             <div className="p-3">
               {/* JSON 데이터 - 하나만 표시 */}
               <div className="space-y-2">
-                {progressMessages.filter(msg => 
-                  msg.rawJson && 
-                  typeof msg.rawJson === 'string' && 
-                  msg.rawJson.trim().startsWith('{') && 
-                  (msg.rawJson.includes("process_info") || msg.rawJson.includes("extwork/extraction/progress"))
-                ).slice(0, 1).map((msg, idx) => (
+                {progressMessages.filter(msg => msg.rawJson).slice(0, 1).map((msg, idx) => (
                   <div key={`json-${idx}`} className="p-2 rounded bg-white border border-gray-100 text-[10px] leading-tight">
                       <div className="flex justify-between items-center">
                       <span className="font-medium text-green-700">JSON 데이터</span>
@@ -4211,35 +5744,6 @@ export default function TankSystem({
                         <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[9px]">
                           {(() => {
                             try {
-                              // 유효성 검사 추가
-                              if (!msg.rawJson || msg.rawJson.trim() === '') {
-                                return (
-                                  <div className="col-span-2 text-amber-600">
-                                    비어있는 데이터
-                                  </div>
-                                );
-                              }
-                              
-                              // 'next'와 같은 유효하지 않은 문자열 검사
-                              if (msg.rawJson.trim() === 'next' || !msg.rawJson.trim().startsWith('{')) {
-                                return (
-                                  <div className="col-span-2 text-amber-600">
-                                    형식이 올바르지 않은 데이터: {msg.rawJson}
-                                  </div>
-                                );
-                              }
-                              
-                              // 텍스트 메시지인 경우 처리
-                              if (msg.rawJson.includes("현재 밸브 상태") || 
-                                  !msg.rawJson.trim().startsWith('{')) {
-                                return (
-                                  <div className="col-span-2">
-                                    <span className="font-semibold text-green-700">메시지:</span>{" "}
-                                    <span className="font-medium">{msg.rawJson}</span>
-                                  </div>
-                                );
-                              }
-                              
                               const jsonData = JSON.parse(msg.rawJson);
                               return (
                                 <>
@@ -4276,13 +5780,9 @@ export default function TankSystem({
                                 </>
                               );
                             } catch (error) {
-                              console.error("JSON 파싱 오류:", error, "데이터:", msg.rawJson?.substring(0, 50));
                               return (
                                 <div className="col-span-2 text-red-500">
-                                  JSON 파싱 오류: {error.message}
-                                  <div className="mt-1 text-gray-500 text-[8px] truncate">
-                                    {msg.rawJson ? `${msg.rawJson.substring(0, 40)}${msg.rawJson.length > 40 ? '...' : ''}` : '데이터 없음'}
-                                  </div>
+                                  JSON 파싱 오류: 잘못된 형식
                                 </div>
                               );
                             }
@@ -4290,289 +5790,10 @@ export default function TankSystem({
                           </div>
                         </div>
                       )}
-                      </div>
+                            </div>
                 ))}
-                {progressMessages.filter(msg => msg.rawJson).length === 0 && (
-                  <div className="text-gray-500 text-[10px] italic p-2 text-center">
-                    데이터가 없습니다
-                  </div>
-                )}
-              </div>
-              
-              {/* 채움 비율 진행 바 - 애니메이션 적용 */}
-              <div className="mb-2 mt-3 pt-2 border-t border-gray-200">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold">진행 상태:</span>
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                    fillPercentage >= 90 ? 'bg-green-100 text-green-800' :
-                    fillPercentage >= 60 ? 'bg-blue-100 text-blue-800' :
-                    fillPercentage >= 30 ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 repetition 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          if (jsonData.repetition_count && jsonData.repetition) {
-                            return `${jsonData.repetition_count - jsonData.repetition}회 남음`;
-                          }
-                        }
-                      } catch (e) {
-                        console.error('Repetition parsing error:', e);
-                      }
-                      return `${Math.floor(fillPercentage)}%`;
-                    })()}
-                  </span>
-                </div>
-                
-                {/* 원형 그래프 추가 */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="w-16 h-16 relative">
-                    <svg viewBox="0 0 36 36" className="w-full h-full">
-                      {/* 배경 원 */}
-                      <circle 
-                        cx="18" 
-                        cy="18" 
-                        r="15.9" 
-                        fill="none" 
-                        stroke="#eeeeee" 
-                        strokeWidth="3"
-                      />
-                      
-                      {/* 진행 원 */}
-                      {(() => {
-                        // 기본값 대신 동적 진행률 계산
-                        let percent = 0;
-
-                        // 최신 JSON 데이터에서 진행 정보 찾기
-                        try {
-                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                          if (latestJsonMsg && latestJsonMsg.rawJson) {
-                            const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                            // process_time과 total_remaining으로 진행률 계산
-                            if (jsonData.process_time && jsonData.total_remaining) {
-                              const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
-                              const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
-                              
-                              if (totalTime > 0 && totalRemaining >= 0) {
-                                // 진행률 계산 = (전체 시간 - 남은 시간) / 전체 시간 * 100
-                                percent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
-                              }
-                            }
-                          }
-                        } catch (e) {
-                          console.error('Progress calculation error:', e);
-                          // 에러 발생 시 기본값 유지
-                        }
-                        
-                        return (
-                          <>
-                            <circle 
-                              cx="18" 
-                              cy="18" 
-                              r="15.9" 
-                              fill="none" 
-                              stroke={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'} 
-                              strokeWidth="3" 
-                              strokeDasharray={`${percent}, 100`} 
-                              strokeDashoffset="25" 
-                              strokeLinecap="round" 
-                              className="transition-all duration-1000"
-                            />
-                            
-                            {/* 가운데 텍스트 */}
-                            <text 
-                              x="18" 
-                              y="18.5" 
-                              textAnchor="middle" 
-                              fontSize="10" 
-                              fontWeight="bold" 
-                              fill={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'}
-                            >
-                              {percent}%
-                            </text>
-                          </>
-                        );
-                      })()}
-                    </svg>
-                  </div>
-                  
-                  {/* 진행 상태 바를 개별로 분리하여 표시 */}
-                  <div className="space-y-1.5 flex-1 ml-2">
-                    {/* 현재 작업 진행률 바 - 대기중에도 항상 표시 */}
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 펌프 진행 정보 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          
-                          // 대기 상태인 경우 - 고정 값으로 표시
-                          if (jsonData.process_info === "waiting") {
-                            const pumpId = jsonData.pump_id || 0;
-                            return (
-                              <div className="flex items-center space-x-2">
-                                <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(대기):</span>
-                                <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                  <div 
-                                    className="h-full bg-yellow-200 rounded-full"
-                                    style={{ width: '100%' }}
-                                  ></div>
-                                </div>
-                                <span className="text-[9px] font-semibold text-yellow-700">대기중</span>
-                              </div>
-                            );
-                          }
-                          
-                          // 일반 작업 상태
-                          if (jsonData.pump_id) {
-                            const pumpMatch = String(jsonData.pump_id).match(/(\d+)\((\d+)\/(\d+)\)/);
-                            if (pumpMatch) {
-                              const pumpId = parseInt(pumpMatch[1], 10);
-                              const current = parseInt(pumpMatch[2], 10);
-                              const total = parseInt(pumpMatch[3], 10);
-                              if (!isNaN(current) && !isNaN(total) && total > 0) {
-                                const pumpPercent = Math.min(100, Math.floor((current / total) * 100));
-                                return (
-                                  <div className="flex items-center space-x-2">
-                                    <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
-                                    <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                      <div 
-                                        className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
-                                        style={{ width: `${pumpPercent}%` }}
-                                      ></div>
-                                    </div>
-                                    <span className="text-[9px] font-semibold text-yellow-700">{pumpPercent}%</span>
-                                  </div>
-                                );
-                              }
-                            } else if (typeof jsonData.pump_id === 'number') {
-                              // 펌프 ID가 숫자인 경우 - 단순히 펌프 번호만 표시
-                              const pumpId = jsonData.pump_id;
-                              return (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-yellow-700 w-14">펌프 {pumpId}(가동):</span>
-                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-yellow-500 rounded-full transition-all duration-1000 ease-in-out"
-                                      style={{ width: '50%' }}
-                                    ></div>
-                                  </div>
-                                  <span className="text-[9px] font-semibold text-yellow-700">진행중</span>
-                                </div>
-                              );
-                            }
-                          }
-                        }
-                      } catch (e) {
-                        console.error('Pump info parsing error:', e);
-                      }
-                      
-                      // 기본 상태 - 항상 표시되도록
-                      return (
-                        <div className="flex items-center space-x-2">
-                          <span className="text-[10px] font-medium text-yellow-700 w-14">펌프(대기):</span>
-                          <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-yellow-200 rounded-full"
-                              style={{ width: '100%' }}
-                            ></div>
-                          </div>
-                          <span className="text-[9px] font-semibold text-yellow-700">미작동</span>
-                        </div>
-                      );
-                    })()}
-                    
-                    {/* 대기시간 카운터 그래프 */}
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 대기시간 정보 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          
-                          // 대기 상태인 경우에 대기시간 카운터 표시
-                          if (jsonData.process_info === "waiting" && jsonData.remaining_time !== undefined && jsonData.total_time !== undefined) {
-                            const remainingTime = parseInt(String(jsonData.remaining_time), 10);
-                            const totalTime = parseInt(String(jsonData.total_time), 10);
-                            
-                            if (!isNaN(remainingTime) && !isNaN(totalTime) && totalTime > 0) {
-                              const elapsedTime = totalTime - remainingTime;
-                              const waitPercent = Math.min(100, Math.max(0, Math.floor((elapsedTime / totalTime) * 100)));
-                              
-                              return (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-blue-700 w-14">대기카운터:</span>
-                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-in-out"
-                                      style={{ width: `${waitPercent}%` }}
-                                    ></div>
-                                  </div>
-                                  <span className="text-[9px] font-semibold text-blue-700">{remainingTime}초/{totalTime}초</span>
-                                </div>
-                              );
-                            }
-                          }
-                        }
-                      } catch (e) {
-                        console.error('Wait counter parsing error:', e);
-                      }
-                      return null;
-                    })()}
-                    
-                    {/* 자동화 대기시간 진행률 바 */}
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 대기시간 정보 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
-                          const jsonData = JSON.parse(latestJsonMsg.rawJson);
-                          
-                          // total_remaining이 있으면 대기시간으로 표시
-                          if (jsonData.total_remaining && jsonData.process_time) {
-                            const totalTime = parseInt(String(jsonData.process_time).match(/(\d+)/)?.[1] || "0", 10);
-                            const totalRemaining = parseInt(String(jsonData.total_remaining).match(/(\d+)/)?.[1] || "0", 10);
-                            
-                            if (totalTime > 0 && totalRemaining > 0) {
-                              const waitPercent = Math.min(100, Math.max(0, Math.floor(100 - (totalRemaining / totalTime * 100))));
-                              
-                              // 시간 단위 계산 (시:분:초 형식)
-                              const hours = Math.floor(totalRemaining / 3600);
-                              const minutes = Math.floor((totalRemaining % 3600) / 60);
-                              const seconds = totalRemaining % 60;
-                              
-                              // 시간 포맷팅 (시간이 있으면 시:분:초, 없으면 분:초)
-                              const timeDisplay = hours > 0 
-                                ? `${hours}시 ${minutes}분 ${seconds}초`
-                                : `${minutes}분 ${seconds}초`;
-                              
-                              return (
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-[10px] font-medium text-purple-700 w-14">공정 종료:</span>
-                                  <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-purple-500 rounded-full transition-all duration-1000 ease-in-out"
-                                      style={{ width: `${waitPercent}%` }}
-                                    ></div>
-                                  </div>
-                                  <span className="text-[9px] font-semibold text-purple-700">{timeDisplay}</span>
-                                </div>
-                              );
-                            }
-                          }
-                        }
-                      } catch (e) {
-                        console.error('Wait time parsing error:', e);
-                      }
-                      return null;
-                    })()}
-                  </div>
-                </div>
-              </div>
-            </div>
+                            </div>
+                            </div>
           </div>
           
           {/* 추가 정보 박스 3 - 알림 */}

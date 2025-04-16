@@ -579,6 +579,7 @@ export default function TankSystem({
       
       // 추출 명령 입력 토픽 구독 추가
       mqttClient.subscribe('extwork/extraction/input');
+      mqttClient.subscribe('extwork/extraction/output');
       
       // STATUS 요청 제거 - Redis에서 상태를 가져오도록 변경
       // 밸브, 펌프 상태는 MQTT 메시지를 통해 업데이트
@@ -643,6 +644,9 @@ export default function TankSystem({
             const timeStr = formatTimeStr();
             const displayMessage = `새 공정 명령 수신: ${jsonData.name || jsonData.sequences?.[0]?.name || 'JSON 명령'} (${timeStr})`;
             
+            // 공정 진행 상태 업데이트 - "실행중"으로 변경
+            setPlanStatus("실행중");
+            
             // 별도 상태로 저장 (active = true로 설정)
             setExtractionCommand({
               timestamp: Date.now(),
@@ -659,13 +663,13 @@ export default function TankSystem({
             // 알림 추가
             addNotification(`새 공정 명령이 수신되었습니다: ${jsonData.name || jsonData.sequences?.[0]?.name || 'JSON 명령'}`, 'info');
             
-            // 기존 progress 메시지 업데이트도 유지
+            // 기존 progress 메시지 업데이트 - 이전 메시지를 모두 지우고 최신 메시지만 유지하도록 수정
             if (setProgressMessages) {
-              setProgressMessages(prev => [{
+              setProgressMessages([{
                 timestamp: Date.now(),
                 message: displayMessage,
                 rawJson: messageStr
-              }, ...prev]);
+              }]);
             }
             
             console.log(`추출 명령 처리됨: ${displayMessage}`);
@@ -677,14 +681,28 @@ export default function TankSystem({
             
             // 파싱 실패 메시지 추가
             if (setProgressMessages) {
-              setProgressMessages(prev => [{
+              setProgressMessages([{
                 timestamp: Date.now(),
                 message: `오류: 수신된 명령의 JSON 형식이 잘못되었습니다. [${messageStr.substring(0, 20)}${messageStr.length > 20 ? '...' : ''}]`,
                 rawJson: null
-              }, ...prev]);
+              }]);
             }
           }
           return; // 다른 핸들러 호출하지 않고 종료
+        }
+        // extwork/extraction/output 토픽 처리 추가 - 공정 완료 감지
+        else if (topic === 'extwork/extraction/output') {
+          if (messageStr.includes("공정 종료") || 
+              messageStr.includes("사이클 완료") || 
+              messageStr.includes("JSON 명령이 성공적으로 처리")) {
+            console.log('공정 완료 메시지 감지:', messageStr);
+            // 공정 상태를 "준비중"으로 변경
+            setPlanStatus("준비중");
+            // 메시지 리셋 (선택적)
+            if (setProgressMessages) {
+              setProgressMessages([]);
+            }
+          }
         }
         // 토픽에 따른 처리
         else if (topic === 'tank-system/notifications') {
@@ -2410,20 +2428,6 @@ export default function TankSystem({
           setProcessRunning(false);
           localStorage.setItem('process-running-state', JSON.stringify({ running: false }));
           console.log('프로세스 완료 감지, 상태 초기화');
-          
-          // extractionCommand 상태 초기화 (공정 계획 요약 초기화용)
-          setExtractionCommand({
-            timestamp: Date.now(),
-            message: "준비중",
-            rawJson: null,
-            active: false
-          });
-          
-          // 로컬 스토리지에도 비활성 상태로 저장
-          localStorage.setItem('extractionCommandActive', 'false');
-          
-          // 공정 종료 알림 추가
-          addNotification("공정이 종료되었습니다.", 'info');
         }
       } else if (topic === 'extwork/automation/control') {
         const messageStr = message.toString();
@@ -3422,6 +3426,9 @@ export default function TankSystem({
     }
   }, []);
 
+  // 변수 추가 - 공정 진행 계획 상태 추가
+  const [planStatus, setPlanStatus] = useState<string>("준비중");
+
   return (
     <div className="relative w-full h-[950px] bg-white rounded-lg shadow-sm overflow-hidden border border-gray-100">
       {/* 펄스 애니메이션 스타일 추가 */}
@@ -4033,30 +4040,27 @@ export default function TankSystem({
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-2">
             <div className="bg-blue-50 py-1 px-2 text-xs font-semibold text-blue-700 rounded-t-lg border-b border-gray-200 flex justify-between items-center">
               <span>공정 진행 계획 요약</span>
-              {progressMessages.filter(msg => 
-                msg.rawJson && 
-                msg.rawJson.trim().startsWith('{') && 
-                !msg.rawJson.includes("process_info")
-              ).length > 0 && (
+              {planStatus === "실행중" ? (
                 <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[9px] font-bold animate-pulse">
                   활성
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-800 rounded-full text-[9px] font-bold">
+                  {planStatus}
                 </span>
               )}
             </div>
             <div className="p-2 text-xs">
               {/* 공정 계획 정보 표시 */}
               <div className="space-y-2">
-                {processRunning === false ? (
+                {/* 공정 계획이 없는 경우 메시지 표시 */}
+                {progressMessages.filter(msg => msg.rawJson && msg.rawJson.trim().startsWith('{')).length === 0 ? (
                   <div className="bg-gray-50 p-2 rounded border border-gray-100 text-center">
-                    <span className="font-medium text-gray-500">준비중</span>
+                    <span className="text-gray-500 italic">공정 계획이 없습니다. 준비중...</span>
                   </div>
                 ) : (
-                  progressMessages.filter(msg => 
-                    msg.rawJson && 
-                    msg.rawJson.trim().startsWith('{') && 
-                    !msg.rawJson.includes("process_info") && 
-                    !msg.rawJson.includes("extwork/extraction/progress")
-                  ).slice(0, 1).map((msg, idx) => {
+                  /* 공정 계획 정보 표시 - 첫 번째 메시지만 표시 */
+                  progressMessages.filter(msg => msg.rawJson && msg.rawJson.trim().startsWith('{')).slice(0, 1).map((msg, idx) => {
                     try {
                       // 유효성 검사 추가
                       if (!msg.rawJson || msg.rawJson.trim() === '') {
@@ -4170,39 +4174,32 @@ export default function TankSystem({
                         </div>
                       );
                     }
-                  })
-                )}
-                {processRunning && progressMessages.filter(msg => 
-                    msg.rawJson && 
-                    msg.rawJson.trim().startsWith('{') && 
-                    !msg.rawJson.includes("process_info") && 
-                    !msg.rawJson.includes("extwork/extraction/progress")
-                  ).length === 0 && (
-                  <div className="bg-gray-50 p-2 rounded border border-gray-100 text-center">
-                    <span className="font-medium text-gray-500">데이터 없음</span>
-                  </div>
-                )}
+                  })}
+                </div>
               </div>
             </div>
-          </div>
-          
+            
           {/* 추가 정보 박스 2 - Loading Process */}
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-4">
             <div className="bg-green-50 py-1 px-2 text-xs font-semibold text-green-700 rounded-t-lg border-b border-gray-200">
-              Loading Process
+              진행 중인 공정 상태
             </div>
             <div className="p-3">
-              {/* JSON 데이터 - 하나만 표시 */}
+              {/* JSON 데이터 - 진행 중인 공정 상태만 표시 */}
               <div className="space-y-2">
-                {progressMessages.filter(msg => 
-                  msg.rawJson && 
-                  typeof msg.rawJson === 'string' && 
-                  msg.rawJson.trim().startsWith('{') && 
-                  (msg.rawJson.includes("process_info") || msg.rawJson.includes("extwork/extraction/progress"))
-                ).slice(0, 1).map((msg, idx) => (
+                {progressMessages.filter(msg => {
+                  try {
+                    return msg.rawJson && 
+                           typeof msg.rawJson === 'string' && 
+                           msg.rawJson.trim().startsWith('{') &&
+                           msg.rawJson.includes("process_info");
+                  } catch (e) {
+                    return false;
+                  }
+                }).slice(0, 1).map((msg, idx) => (
                   <div key={`json-${idx}`} className="p-2 rounded bg-white border border-gray-100 text-[10px] leading-tight">
                       <div className="flex justify-between items-center">
-                      <span className="font-medium text-green-700">JSON 데이터</span>
+                      <span className="font-medium text-green-700">진행 상태</span>
                       <span className="text-green-500 font-semibold text-[8px]">{formatTimeStr()}</span>
                       </div>
                       
@@ -4376,8 +4373,7 @@ export default function TankSystem({
                               fill="none" 
                               stroke={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'} 
                               strokeWidth="3" 
-                              strokeDasharray={`${percent}, 100`} 
-                              strokeDashoffset="25" 
+                              strokeDasharray={`${percent * 0.9}, 100`} 
                               strokeLinecap="round" 
                               className="transition-all duration-1000"
                             />
