@@ -4146,8 +4146,7 @@ export default function TankSystem({
               <span>공정 진행 계획 요약</span>
               {progressMessages.filter(msg => 
                 msg.rawJson && 
-                msg.rawJson.trim().startsWith('{') && 
-                !msg.rawJson.includes("process_info")
+                msg.rawJson.trim().startsWith('{')
               ).length > 0 && (
                 <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded-full text-[9px] font-bold animate-pulse">
                   활성
@@ -4157,16 +4156,14 @@ export default function TankSystem({
             <div className="p-2 text-xs">
               {/* 공정 계획 정보 표시 */}
               <div className="space-y-2">
-                {processRunning === false ? (
+                {false ? ( // processRunning 상태에 관계없이 항상 내용 표시
                   <div className="bg-gray-50 p-2 rounded border border-gray-100 text-center">
                     <span className="font-medium text-gray-500">준비중</span>
                   </div>
                 ) : (
                   progressMessages.filter(msg => 
                     msg.rawJson && 
-                    msg.rawJson.trim().startsWith('{') && 
-                    !msg.rawJson.includes("process_info") && 
-                    !msg.rawJson.includes("extwork/extraction/progress")
+                    msg.rawJson.trim().startsWith('{')
                   ).slice(0, 1).map((msg, idx) => {
                     try {
                       // 유효성 검사 추가
