@@ -2348,15 +2348,15 @@ export default function TankSystem({
         console.log('저장된 상태 로드 시도 - mqttClient 상태:', mqttClient ? '존재' : '없음');
         console.log('onValveChange 함수 상태:', onValveChange ? '존재' : '없음');
         
-        // 서버 및 로컬 스토리지에서 상태 로드 시도
-        const savedState = await loadInitialState();
-        
-        if (savedState) {
-          console.log('저장된 상태를 복원합니다:', savedState);
+          // 서버 및 로컬 스토리지에서 상태 로드 시도
+          const savedState = await loadInitialState();
           
-          try {
+          if (savedState) {
+          console.log('저장된 상태를 복원합니다:', savedState);
+            
+            try {
             // 저장된 상태로 업데이트 로직
-            if (savedState.valveState && onValveChange) {
+              if (savedState.valveState && onValveChange) {
               console.log('저장된 밸브 상태 복원 시도:', savedState.valveState);
               
               // 저장된 설명 로그 출력
@@ -2386,23 +2386,23 @@ export default function TankSystem({
               setTimeout(() => {
                 console.log('현재 UI에 표시된 밸브 상태:', tankData.valveState);
               }, 100);
-            }
-            
-            // 필요한 경우 상태 업데이트를 MQTT로 브로드캐스트
+              }
+              
+              // 필요한 경우 상태 업데이트를 MQTT로 브로드캐스트
             if (mqttClient?.connected) {
-              mqttClient.publish('tank-system/state-loaded', JSON.stringify({
-                clientId: clientId.current,
-                timestamp: Date.now(),
+                mqttClient.publish('tank-system/state-loaded', JSON.stringify({
+                  clientId: clientId.current,
+                  timestamp: Date.now(),
                 source: 'localStorage',
                 valveState: savedState.valveState,
                 descriptions: {
                   valveADesc: savedState.valveADesc,
                   valveBDesc: savedState.valveBDesc
                 }
-              }));
-            }
-          } catch (updateError) {
-            console.error('상태 복원 중 오류 발생:', updateError);
+                }));
+              }
+            } catch (updateError) {
+              console.error('상태 복원 중 오류 발생:', updateError);
           }
         }
       } catch (error) {
@@ -4156,7 +4156,7 @@ export default function TankSystem({
             </div>
             <div className="p-2 text-xs">
               {/* 공정 계획 정보 표시 */}
-                <div className="space-y-2">
+              <div className="space-y-2">
                 {processRunning === false ? (
                   <div className="bg-gray-50 p-2 rounded border border-gray-100 text-center">
                     <span className="font-medium text-gray-500">준비중</span>
@@ -4180,40 +4180,40 @@ export default function TankSystem({
                       }
                       
                       // JSON 파싱 시도
-                      const jsonData = msg.rawJson ? JSON.parse(msg.rawJson) : null;
-                      
-                      // 복합 명령어 처리 (sequences 배열이 있는 경우)
-                      if (jsonData?.sequences && Array.isArray(jsonData.sequences)) {
-                        return (
-                          <div key={`process-plan-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
-                            <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">복합 공정 계획</div>
-                            
-                            {jsonData.sequences.map((seq, seqIdx) => (
-                              <div key={`seq-${seqIdx}`} className="mb-2 p-1.5 bg-white rounded border border-gray-100">
-                                <div className="flex justify-between items-center mb-1">
-                                  <span className="font-semibold text-blue-700">시퀀스 {seqIdx + 1}:</span>
-                                  <span className="text-[9px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">
-                                    {seq.operation_mode ? `모드: ${seq.operation_mode}` : ''}
-                                  </span>
-                                </div>
+                    const jsonData = msg.rawJson ? JSON.parse(msg.rawJson) : null;
+                    
+                    // 복합 명령어 처리 (sequences 배열이 있는 경우)
+                    if (jsonData?.sequences && Array.isArray(jsonData.sequences)) {
+                      return (
+                        <div key={`process-plan-${idx}`} className="bg-gray-50 p-2 rounded border border-gray-100">
+                          <div className="mb-2 font-semibold text-blue-700 border-b border-blue-100 pb-1">복합 공정 계획</div>
+                          
+                          {jsonData.sequences.map((seq, seqIdx) => (
+                            <div key={`seq-${seqIdx}`} className="mb-2 p-1.5 bg-white rounded border border-gray-100">
+                  <div className="flex justify-between items-center mb-1">
+                                <span className="font-semibold text-blue-700">시퀀스 {seqIdx + 1}:</span>
+                                <span className="text-[9px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100">
+                                  {seq.operation_mode ? `모드: ${seq.operation_mode}` : ''}
+                                </span>
+                  </div>
                               
                                 {/* 추가 정보 표시 */}
                                 <div className="grid grid-cols-2 gap-1 text-[9px]">
-                                {seq.repeats !== undefined && (
+                              {seq.repeats !== undefined && (
                                     <div>
                                       <span className="font-semibold text-blue-700">반복:</span>{" "}
                                       <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{seq.repeats}회</span>
-                                  </div>
-                                )}
+                  </div>
+                              )}
                               
                                   {seq.wait_time !== undefined && (
                                     <div>
                                       <span className="font-semibold text-blue-700">대기:</span>{" "}
                                       <span className="bg-blue-50 px-1 py-0.5 rounded border border-blue-100">{seq.wait_time}초</span>
-                                  </div>
-                                )}
-                              </div>
-                          </div>
+                                </div>
+                              )}
+                            </div>
+                        </div>
                             ))}
                             
                             {/* 선택된 펌프 표시 */}
@@ -4223,22 +4223,22 @@ export default function TankSystem({
                                 <div className="flex flex-wrap gap-1">
                                   {jsonData.selectedPumps.map((selected, i) => {
                                     const pumpId = selected ? (i + 1) : null;
-                                  if (!pumpId) return null;
-                                  return (
-                                    <span key={i} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
-                                      {pumpId}
+                                if (!pumpId) return null;
+                                return (
+                                  <span key={i} className="bg-green-50 text-green-700 text-[9px] px-1.5 py-0.5 rounded border border-green-100">
+                                    {pumpId}
                             </span>
-                                  );
-                                }).filter(Boolean)}
-                              </div>
+                                );
+                              }).filter(Boolean)}
                             </div>
-                          )}
-                          {jsonData?.estimated_completion_time && (
-                            <div className="mb-1 flex justify-between items-center">
-                              <span className="font-semibold text-blue-700">예상 종료:</span>{" "}
-                              <span className="bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-indigo-700">{jsonData.estimated_completion_time}</span>
-                          </div>
-                          )}
+                  </div>
+                        )}
+                        {jsonData?.estimated_completion_time && (
+                          <div className="mb-1 flex justify-between items-center">
+                            <span className="font-semibold text-blue-700">예상 종료:</span>{" "}
+                            <span className="bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-indigo-700">{jsonData.estimated_completion_time}</span>
+                </div>
+                        )}
                           </div>
                         );
                       }
@@ -4267,20 +4267,20 @@ export default function TankSystem({
                               </div>
                             )}
                           </div>
-                        </div>
-                      );
-                    } catch (error) {
+              </div>
+                    );
+                  } catch (error) {
                       console.error('JSON 파싱 오류:', error, msg.rawJson);
-                      return (
+                    return (
                         <div className="text-red-500 bg-red-50 p-2 rounded border border-red-200">
-                          공정 명령 처리 중 오류가 발생했습니다.
+                        공정 명령 처리 중 오류가 발생했습니다.
                           <div className="text-[9px] mt-1">오류: {error.message}</div>
                           <div className="text-[8px] mt-1 text-gray-500 truncate">
                             {msg.rawJson ? `원본: ${msg.rawJson.substring(0, 30)}${msg.rawJson.length > 30 ? '...' : ''}` : '데이터 없음'}
                           </div>
-                        </div>
-                      );
-                    }
+                      </div>
+                    );
+                  }
                   })
                 )}
                 {processRunning && progressMessages.filter(msg => 
@@ -4416,25 +4416,25 @@ export default function TankSystem({
                 {progressMessages.filter(msg => msg.rawJson).length === 0 && (
                   <div className="text-gray-500 text-[10px] italic p-2 text-center">
                     데이터가 없습니다
-                            </div>
+                  </div>
                 )}
               </div>
-              
-              {/* 채움 비율 진행 바 - 애니메이션 적용 */}
-              <div className="mb-2 mt-3 pt-2 border-t border-gray-200">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold">진행 상태:</span>
-                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                    fillPercentage >= 90 ? 'bg-green-100 text-green-800' :
-                    fillPercentage >= 60 ? 'bg-blue-100 text-blue-800' :
-                    fillPercentage >= 30 ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 repetition 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
+                
+                {/* 채움 비율 진행 바 - 애니메이션 적용 */}
+                <div className="mb-2 mt-3 pt-2 border-t border-gray-200">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-semibold">진행 상태:</span>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                      fillPercentage >= 90 ? 'bg-green-100 text-green-800' :
+                      fillPercentage >= 60 ? 'bg-blue-100 text-blue-800' :
+                      fillPercentage >= 30 ? 'bg-yellow-100 text-yellow-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 repetition 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
                           // JSON 형식 검증 추가
                           const rawJson = latestJsonMsg.rawJson.trim();
                           if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
@@ -4445,39 +4445,39 @@ export default function TankSystem({
                           } else {
                             // JSON이 아닌 경우 기본값 사용
                             console.log('비 JSON 형식 메시지 무시:', rawJson.substring(0, 30));
+                            }
                           }
+                        } catch (e) {
+                          console.error('Repetition parsing error:', e);
                         }
-                      } catch (e) {
-                        console.error('Repetition parsing error:', e);
-                      }
-                      return `${Math.floor(fillPercentage)}%`;
-                    })()}
-                  </span>
-                </div>
-                
-                {/* 원형 그래프 추가 */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="w-16 h-16 relative">
-                    <svg viewBox="0 0 36 36" className="w-full h-full">
-                      {/* 배경 원 */}
-                      <circle 
-                        cx="18" 
-                        cy="18" 
-                        r="15.9" 
-                        fill="none" 
-                        stroke="#eeeeee" 
-                        strokeWidth="3"
-                      />
-                      
-                      {/* 진행 원 */}
-                      {(() => {
-                        // 기본값 대신 동적 진행률 계산
-                        let percent = 0;
+                        return `${Math.floor(fillPercentage)}%`;
+                      })()}
+                    </span>
+                  </div>
+                  
+                  {/* 원형 그래프 추가 */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="w-16 h-16 relative">
+                      <svg viewBox="0 0 36 36" className="w-full h-full">
+                        {/* 배경 원 */}
+                        <circle 
+                          cx="18" 
+                          cy="18" 
+                          r="15.9" 
+                          fill="none" 
+                          stroke="#eeeeee" 
+                          strokeWidth="3"
+                        />
+                        
+                        {/* 진행 원 */}
+                        {(() => {
+                          // 기본값 대신 동적 진행률 계산
+                          let percent = 0;
 
-                        // 최신 JSON 데이터에서 진행 정보 찾기
-                        try {
-                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                          if (latestJsonMsg && latestJsonMsg.rawJson) {
+                          // 최신 JSON 데이터에서 진행 정보 찾기
+                          try {
+                            const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                            if (latestJsonMsg && latestJsonMsg.rawJson) {
                             // JSON 형식 검증 추가
                             const rawJson = latestJsonMsg.rawJson.trim();
                             if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
@@ -4495,53 +4495,65 @@ export default function TankSystem({
                             } else {
                               // JSON이 아닌 경우 로그만 남기고 기본값 사용
                               console.log('비 JSON 형식 메시지 진행 정보 무시:', rawJson.substring(0, 30));
+                              }
                             }
-                          }
-                        } catch (e) {
-                          console.error('Progress calculation error:', e);
+                          } catch (e) {
+                            console.error('Progress calculation error:', e);
                           // 에러 발생 시 기본값 유지
-                        }
-                        
-                        return (
-                          <>
-                            <circle 
-                              cx="18" 
-                              cy="18" 
-                              r="15.9" 
-                              fill="none" 
-                              stroke={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'} 
-                              strokeWidth="3" 
-                              strokeDasharray={`${percent}, 100`} 
-                              strokeDashoffset="25" 
-                              strokeLinecap="round" 
-                              className="transition-all duration-1000"
-                            />
-                            
-                            {/* 가운데 텍스트 */}
-                            <text 
-                              x="18" 
-                              y="18.5" 
-                              textAnchor="middle" 
-                              fontSize="10" 
-                              fontWeight="bold" 
-                              fill={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'}
-                            >
-                              {percent}%
-                            </text>
-                          </>
-                        );
-                      })()}
-                    </svg>
-                  </div>
-                  
-                  {/* 진행 상태 바를 개별로 분리하여 표시 */}
-                  <div className="space-y-1.5 flex-1 ml-2">
-                    {/* 현재 작업 진행률 바 - 대기중에도 항상 표시 */}
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 펌프 진행 정보 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
+                          }
+                          
+                          return (
+                            <>
+                              {/* 배경 원 - 완전한 원으로 백그라운드 표시 */}
+                              <circle 
+                                cx="18" 
+                                cy="18" 
+                                r="15.9" 
+                                fill="none" 
+                                stroke="#eeeeee" 
+                                strokeWidth="3"
+                              />
+                              
+                              {/* 진행 원 - 시작 위치를 12시 방향(맨 위)으로 설정하고 시계 방향으로 진행 */}
+                              <circle 
+                                cx="18" 
+                                cy="18" 
+                                r="15.9" 
+                                fill="none" 
+                                stroke={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'} 
+                                strokeWidth="3" 
+                                strokeDasharray={`${2 * Math.PI * 15.9 * percent / 100}, ${2 * Math.PI * 15.9}`} 
+                                strokeDashoffset="0" 
+                                strokeLinecap="round" 
+                                transform="rotate(-90, 18, 18)"
+                                className="transition-all duration-1000"
+                              />
+                              
+                              {/* 가운데 텍스트 */}
+                              <text 
+                                x="18" 
+                                y="18.5" 
+                                textAnchor="middle" 
+                                fontSize="10" 
+                                fontWeight="bold" 
+                                fill={percent >= 90 ? '#22c55e' : percent >= 60 ? '#3b82f6' : percent >= 30 ? '#eab308' : '#6b7280'}
+                              >
+                                {percent > 0 ? `${percent}%` : "대기중"}
+                              </text>
+                            </>
+                          );
+                        })()}
+                      </svg>
+                    </div>
+                    
+                    {/* 진행 상태 바를 개별로 분리하여 표시 */}
+                    <div className="space-y-1.5 flex-1 ml-2">
+                      {/* 현재 작업 진행률 바 - 대기중에도 항상 표시 */}
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 펌프 진행 정보 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
                           // JSON 형식 검증 추가
                           const rawJson = latestJsonMsg.rawJson.trim();
                           if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
@@ -4606,33 +4618,33 @@ export default function TankSystem({
                           } else {
                             // JSON이 아닌 경우, 밸브 상태 정보일 수 있음
                             console.log('비 JSON 형식 메시지 펌프 정보 무시:', rawJson.substring(0, 30));
+                            }
                           }
+                        } catch (e) {
+                          console.error('Pump info parsing error:', e);
                         }
-                      } catch (e) {
-                        console.error('Pump info parsing error:', e);
-                      }
-                      
-                      // 기본 상태 - 항상 표시되도록
-                      return (
-                        <div className="flex items-center space-x-2">
-                          <span className="text-[10px] font-medium text-yellow-700 w-14">펌프(대기):</span>
-                          <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-yellow-200 rounded-full"
-                              style={{ width: '100%' }}
-                            ></div>
+                        
+                        // 기본 상태 - 항상 표시되도록
+                        return (
+                          <div className="flex items-center space-x-2">
+                            <span className="text-[10px] font-medium text-yellow-700 w-14">펌프(대기):</span>
+                            <div className="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-yellow-200 rounded-full"
+                                style={{ width: '100%' }}
+                              ></div>
+                            </div>
+                            <span className="text-[9px] font-semibold text-yellow-700">미작동</span>
                           </div>
-                          <span className="text-[9px] font-semibold text-yellow-700">미작동</span>
-                        </div>
-                      );
-                    })()}
-                    
-                    {/* 대기시간 카운터 그래프 */}
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 대기시간 정보 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
+                        );
+                      })()}
+                      
+                      {/* 대기시간 카운터 그래프 */}
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 대기시간 정보 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
                           // JSON 형식 검증 추가
                           const rawJson = latestJsonMsg.rawJson.trim();
                           if (rawJson.startsWith('{') && rawJson.endsWith('}') && !rawJson.includes("현재 밸브 상태")) {
@@ -4664,20 +4676,20 @@ export default function TankSystem({
                           } else {
                             // JSON이 아닌 경우 무시
                             console.log('비 JSON 형식 메시지 대기시간 정보 무시:', rawJson.substring(0, 30));
+                            }
                           }
+                        } catch (e) {
+                          console.error('Wait counter parsing error:', e);
                         }
-                      } catch (e) {
-                        console.error('Wait counter parsing error:', e);
-                      }
-                      return null;
-                    })()}
-                    
+                        return null;
+                      })()}
+                      
                     {/* 자동화 대기시간 진행률 바 */}
-                    {(() => {
-                      try {
-                        // 최신 JSON 데이터에서 대기시간 정보 찾기
-                        const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
-                        if (latestJsonMsg && latestJsonMsg.rawJson) {
+                      {(() => {
+                        try {
+                          // 최신 JSON 데이터에서 대기시간 정보 찾기
+                          const latestJsonMsg = progressMessages.find(msg => msg.rawJson);
+                          if (latestJsonMsg && latestJsonMsg.rawJson) {
                           // JSON 형식 검증 추가
                           const rawJson = latestJsonMsg.rawJson.trim();
                           if (!rawJson.startsWith('{') || !rawJson.endsWith('}')) {
@@ -4735,16 +4747,16 @@ export default function TankSystem({
                           } catch (jsonError) {
                             console.error('JSON 파싱 오류 (자동화 대기시간):', jsonError);
                             return null;
+                            }
                           }
+                        } catch (e) {
+                          console.error('Wait time parsing error:', e);
                         }
-                      } catch (e) {
-                        console.error('Wait time parsing error:', e);
-                      }
-                      return null;
-                    })()}
+                        return null;
+                      })()}
                   </div>
                 </div>
-              </div>
+                            </div>
                             </div>
           </div>
           
