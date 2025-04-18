@@ -955,7 +955,7 @@ export default function Dashboard() {
                 // BLE 연결 관련 메시지 확인
                 if (messageStr.includes("BLE만 연결됨") || 
                     messageStr.includes("BLE 환경으로 전환됨") || 
-                    messageStr.includes("집단지성 네트워크")) {
+                    messageStr.includes("집단지성 네트워크") && !messageStr.includes("MQTT=연결됨")) {
                   // BLE 연결 상태 설정
                   updatedTanks[inverterId - 1] = {
                     ...tank,
@@ -966,7 +966,9 @@ export default function Dashboard() {
                 else if (messageStr.includes("MQTT만 연결됨") || 
                          messageStr.includes("MQTT 환경으로 전환됨") || 
                          messageStr.includes("MQTT 환경에서 동작 중") || 
-                         messageStr.includes("MQTT 재연결 완료")) {
+                         messageStr.includes("MQTT 재연결 완료") ||
+                         messageStr.includes("집단지성 네트워크: ") && messageStr.includes("MQTT=연결됨") ||
+                         messageStr.includes("환경 상태: MQTT만 연결됨")) {
                   // WiFi 연결 상태 설정
                   updatedTanks[inverterId - 1] = {
                     ...tank,

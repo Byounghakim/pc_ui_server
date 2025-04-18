@@ -329,7 +329,7 @@ export async function POST(request: NextRequest) {
       const client = await connectRedis();
       
       if (client) {
-        // Redis에 상태 저장
+    // Redis에 상태 저장
         const value = typeof body === 'string' ? body : JSON.stringify(body);
         await client.set(key, value);
         
@@ -385,7 +385,7 @@ export async function POST(request: NextRequest) {
           logger.info(`${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨`);
           logGroup.end();
           return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨` });
-        } else {
+    } else {
           logger.error('상태 저장 실패');
           logGroup.end();
           return NextResponse.json({ error: '상태 저장 실패' }, { status: 500 });
