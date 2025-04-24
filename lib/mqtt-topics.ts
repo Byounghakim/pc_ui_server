@@ -322,15 +322,10 @@ export function getDefaultTankSystemData(totalTanks: number = 6): TankSystemData
 
 // ========== MQTT_TOPICS 객체 내보내기 ==========
 
-// MQTT 서버 설정 - 환경별 접속 URL
-export const MQTT_SERVERS = {
-  // 프로덕션 환경 및 외부 접근용 WebSocket 서버
-  PROD: 'ws://203.234.35.54:8080',
-  // 로컬 개발 환경 서버 (같은 PC에서 접근)
-  DEV_LOCAL: 'ws://127.0.0.1:8080',
-  // 내부 네트워크에서 접근
-  DEV_LAN: 'ws://192.168.0.26:8080',
-  // 개발 환경 WebSocket 서버 (외부 접근)
+// MQTT 기본 설정
+export const MQTT_SERVER_CONFIG = {
+  PROD: 'wss://203.234.35.54:8080',
+  DEV: 'ws://203.234.35.54:8080',
   DEV_REMOTE: 'ws://203.234.35.54:8080'
 };
 
