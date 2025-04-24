@@ -32,8 +32,8 @@ const environmentSchema = z.object({
   ),
   
   // MQTT 서버 설정
-  mqttDevUrl: z.string().default('ws://192.168.0.26:8080'),
-  mqttProdUrl: z.string().default('ws://203.234.35.54:8080'),
+  mqttDevUrl: z.string().default('ws://192.168.0.26:8080'), //1차 수정(내부 ip)
+  mqttProdUrl: z.string().default('ws://203.234.35.54:8080'), //1차 수정(외부 ip)
   mqttUsername: z.string().default('dnature'),
   mqttPassword: z.string().default('8210'),
 });
