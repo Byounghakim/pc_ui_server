@@ -25,7 +25,7 @@ const nextConfig = {
   optimizeFonts: true,
   // 이미지 최적화 활성화 (서버 측 렌더링에서 사용 가능)
   images: {
-    domains: ['api.codingpen.com'],
+    domains: ['203.234.35.54'],
   },
   // webpack 설정 추가
   webpack: (config, { isServer }) => {

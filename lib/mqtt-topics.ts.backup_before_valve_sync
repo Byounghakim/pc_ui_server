@@ -324,9 +324,9 @@ export function getDefaultTankSystemData(totalTanks: number = 6): TankSystemData
 
 // MQTT 기본 설정
 export const MQTT_SERVER_CONFIG = {
-  PROD: 'wss://api.codingpen.com:8884',
-  DEV: 'ws://localhost:8083',
-  DEV_REMOTE: 'ws://dev.codingpen.com:1884'
+  PROD: 'wss://203.234.35.54:8080',
+  DEV: 'ws://203.234.35.54:8080',
+  DEV_REMOTE: 'ws://203.234.35.54:8080'
 };
 
 // MQTT 토픽 상수 정의

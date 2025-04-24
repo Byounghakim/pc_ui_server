@@ -102,6 +102,8 @@ export interface ApiRetryConfig {
 const defaultConfig: EnvironmentConfig = {
   apiBaseUrl: '/api',
   mqttBrokerUrl: 'mqtt://localhost:1883',
+  mqttUsername: 'dnature',
+  mqttPassword: '8210',
   localStoragePath: './local-storage',
   maxUploadSize: 10 * 1024 * 1024, // 10MB
   debugMode: false,
@@ -118,7 +120,9 @@ const defaultConfig: EnvironmentConfig = {
  */
 const developmentConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_DEV_SERVER || 'mqtt://localhost:1883',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_DEV_SERVER || 'mqtt://203.234.35.54:1883',
+  mqttUsername: process.env.MQTT_USERNAME || 'dnature',
+  mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: true,
   logLevel: 'debug',
   apiRetryConfig: {
@@ -133,7 +137,9 @@ const developmentConfig: Partial<EnvironmentConfig> = {
  */
 const productionConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'mqtt://broker.emqx.io:1883',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'mqtt://203.234.35.54:1883',
+  mqttUsername: process.env.MQTT_USERNAME || 'dnature',
+  mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: process.env.DEBUG_MODE === 'true',
   logLevel: 'warn',
   apiRetryConfig: {
@@ -148,7 +154,9 @@ const productionConfig: Partial<EnvironmentConfig> = {
  */
 const testConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: '/api',
-  mqttBrokerUrl: 'mqtt://localhost:1883',
+  mqttBrokerUrl: 'mqtt://203.234.35.54:1883',
+  mqttUsername: 'dnature',
+  mqttPassword: '8210',
   localStoragePath: './test-storage',
   debugMode: true,
   logLevel: 'debug',

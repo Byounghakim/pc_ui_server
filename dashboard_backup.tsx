@@ -473,8 +473,12 @@ export default function Dashboard() {
     
     // 자동으로 연결 시작
     console.log("MQTT 브로커에 연결 시도...");
-    client.connect();  // 기본 URL과 인증 정보를 사용하도록 수정
+    const serverUrl = process.env.NODE_ENV === 'development' 
+      ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
+      : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
 
+    client.connect(serverUrl, 'dnature', '8210'); // 사용자 이름과 비밀번호도 업데이트
+    
     // 컴포넌트 언마운트 시 연결 종료
     return () => {
       console.log("Dashboard 컴포넌트 언마운트, MQTT 연결 종료");
@@ -1177,10 +1181,10 @@ export default function Dashboard() {
       
       // 서버 연결
       const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
-      
-      client.connect(serverUrl, 'dnature', 'XihQ2Q%RaS9u#Z3g');
+        ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
+        : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
+
+      client.connect(serverUrl, 'dnature', '8210'); // 사용자 이름과 비밀번호도 업데이트
       setMqttClient(client);
     }
   };

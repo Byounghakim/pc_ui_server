@@ -32,10 +32,10 @@ const environmentSchema = z.object({
   ),
   
   // MQTT 서버 설정
-  mqttDevUrl: z.string().default('ws://dev.codingpen.com:1884'),
-  mqttProdUrl: z.string().default('wss://api.codingpen.com:8884'),
+  mqttDevUrl: z.string().default('ws://203.234.35.54:8080'),
+  mqttProdUrl: z.string().default('ws://203.234.35.54:8080'),
   mqttUsername: z.string().default('dnature'),
-  mqttPassword: z.string().default('XihQ2Q%RaS9u#Z3g'),
+  mqttPassword: z.string().default('8210'),
 });
 
 // 환경 변수 타입 정의

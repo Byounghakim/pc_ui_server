@@ -1373,12 +1373,39 @@ export default function Dashboard() {
         client.subscribe(`extwork/inverter${i}/tank${i}_level`);
       }
       
-      // 서버 연결
-      const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
+      // 서버 연결 - 실행 환경에 따라 적절한 주소 사용
+      const hostname = window.location.hostname;
+      let serverUrl;
       
-      client.connect(serverUrl, 'dnature', 'XihQ2Q%RaS9u#Z3g');
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+      } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+        serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+      } else {
+        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+      }
+      
+      // MQTT 연결 이벤트 핸들러 추가
+      client.on('connect', () => {
+        console.log('MQTT 서버에 연결되었습니다:', serverUrl);
+        addProgressMessage({
+          timestamp: Date.now(),
+          message: `MQTT 서버에 연결됨: ${serverUrl}`,
+          rawJson: ''
+        });
+      });
+      
+      client.on('error', (err) => {
+        console.error('MQTT 연결 오류:', err);
+        addProgressMessage({
+          timestamp: Date.now(),
+          message: `MQTT 연결 오류: ${err.message}`,
+          rawJson: JSON.stringify(err)
+        });
+      });
+      
+      console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
+      client.connect(serverUrl, 'dnature', '8210');
       setMqttClient(client);
     }
   };

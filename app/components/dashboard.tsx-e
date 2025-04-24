@@ -460,75 +460,41 @@ export default function Dashboard() {
     // MQTT 클라이언트 생성
     const client = new MqttClient();
 
+    // 서버 연결 - 실행 환경에 따라 적절한 주소 사용
+    const hostname = window.location.hostname;
+    let serverUrl;
+    
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+    } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+      serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+    } else {
+      serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+    }
+    
+    // MQTT 연결 이벤트 핸들러 추가
     client.on('connect', () => {
-      console.log("MQTT 브로커에 연결 성공!");
-      setMqttStatus("연결됨");
-
-      // 모든 토픽 구독 (6개 인버터 기준)
-      const topics = getAllSubscriptionTopics(6);
-      console.log("구독할 토픽:", topics);
-      
-      topics.forEach(topic => {
-        client.subscribe(topic);
-        console.log(`토픽 구독: ${topic}`);
-      });
-      
-      // 밸브 상태 토픽 명시적 구독 추가
-      client.subscribe(VALVE_STATE_TOPIC);
-      console.log("밸브 상태 토픽 명시적 구독:", VALVE_STATE_TOPIC);
-      
-      // 진행 상황 토픽 명시적 구독
-      client.subscribe(PROCESS_PROGRESS_TOPIC);
-      console.log("진행 상황 토픽 구독:", PROCESS_PROGRESS_TOPIC);
-      
-      // 에러 토픽 구독
-      client.subscribe(ERROR_TOPIC);
-      console.log("에러 토픽 구독:", ERROR_TOPIC);
-      
-      // 메인 탱크 수위 토픽 명시적 구독 추가
-      client.subscribe('extwork/tankMain/level');
-      console.log("메인 탱크 수위 토픽 구독: extwork/tankMain/level");
-      
-      // 연결 즉시 밸브 상태 요청 메시지 전송
-      console.log("밸브 상태 요청 메시지 전송:", VALVE_INPUT_TOPIC);
-      // client.publish(VALVE_INPUT_TOPIC, "STATUS");
-
-      // 카메라 상태 토픽 구독 추가
-      for (let i = 1; i <= 5; i++) {
-        client.subscribe(getCamStateTopic(i));
-        console.log("카메라 상태 토픽 구독:", getCamStateTopic(i));
-      }
-    });
-
-    client.on('disconnect', () => {
-      console.log("MQTT 브로커와 연결이 끊겼습니다.");
-      setMqttStatus("연결 끊김");
-      setProgressStatus("disconnected");
-      
-      // 5초 후 자동 재연결 시도
-      setTimeout(() => {
-        console.log("MQTT 자동 재연결 시도...");
-        if (!client.isConnected()) {
-          client.connect();
-        }
-      }, 5000);
-    });
-
-    client.on('error', (error) => {
-      console.error("MQTT 오류 발생:", error);
-      // 오류 메시지 표시
-      setLastErrors(prev => {
-        const newErrors = [`MQTT 오류: ${error.message}`, ...prev].slice(0, 5);
-        return newErrors;
+      console.log('MQTT 서버에 연결되었습니다:', serverUrl);
+      addProgressMessage({
+        timestamp: Date.now(),
+        message: `MQTT 서버에 연결됨: ${serverUrl}`,
+        rawJson: ''
       });
     });
-
+    
+    client.on('error', (err) => {
+      console.error('MQTT 연결 오류:', err);
+      addProgressMessage({
+        timestamp: Date.now(),
+        message: `MQTT 연결 오류: ${err.message}`,
+        rawJson: JSON.stringify(err)
+      });
+    });
+    
+    console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
+    client.connect(serverUrl, 'dnature', '8210');
     setMqttClient(client);
     
-    // 자동으로 연결 시작
-    console.log("MQTT 브로커에 연결 시도...");
-    client.connect();  // 기본 URL과 인증 정보를 사용하도록 수정
-
     // 컴포넌트 언마운트 시 연결 종료
     return () => {
       console.log("Dashboard 컴포넌트 언마운트, MQTT 연결 종료");
@@ -1324,12 +1290,20 @@ export default function Dashboard() {
         client.subscribe(`extwork/inverter${i}/tank${i}_level`);
       }
       
-      // 서버 연결
-      const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
+      // 서버 연결 - 실행 환경에 따라 적절한 주소 사용
+      const hostname = window.location.hostname;
+      let serverUrl;
       
-      client.connect(serverUrl, 'dnature', 'XihQ2Q%RaS9u#Z3g');
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+      } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+        serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+      } else {
+        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+      }
+      
+      console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
+      client.connect(serverUrl, 'dnature', '8210');
       setMqttClient(client);
     }
   };

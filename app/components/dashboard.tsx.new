@@ -617,7 +617,16 @@ export default function Dashboard() {
     
     // 자동으로 연결 시작
     console.log("MQTT 브로커에 연결 시도...");
-    client.connect();  // 기본 URL과 인증 정보를 사용하도록 수정
+    const serverUrl = process.env.NODE_ENV === 'development' 
+      ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
+      : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
+    
+    // 환경 변수 또는 기본값 사용
+    const mqttUsername = process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature'; // 사용자 이름 업데이트
+    const mqttPassword = process.env.NEXT_PUBLIC_MQTT_PASSWORD || '8210'; // 비밀번호 업데이트
+    
+    client.connect(serverUrl, mqttUsername, mqttPassword);
+    setMqttClient(client);
 
     // 컴포넌트 언마운트 시 연결 종료
     return () => {
@@ -1296,12 +1305,12 @@ export default function Dashboard() {
       
       // 서버 연결
       const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
+        ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
+        : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
       
       // 환경 변수 또는 기본값 사용
-      const mqttUsername = process.env.NEXT_PUBLIC_MQTT_USERNAME || 'guest';
-      const mqttPassword = process.env.NEXT_PUBLIC_MQTT_PASSWORD || 'guest';
+      const mqttUsername = process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature'; // 사용자 이름 업데이트
+      const mqttPassword = process.env.NEXT_PUBLIC_MQTT_PASSWORD || '8210'; // 비밀번호 업데이트
       
       client.connect(serverUrl, mqttUsername, mqttPassword);
       setMqttClient(client);

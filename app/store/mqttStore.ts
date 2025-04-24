@@ -14,9 +14,9 @@ export const mqttStore = {
     client: null,
     isConnected: false,
     connectionError: null,
-    mqtt_server: "wss://api.codingpen.com:8884",
+    mqtt_server: "ws://203.234.35.54:8080",
     mqtt_user: "dnature",
-    mqtt_password: "XihQ2Q%RaS9u#Z3g",
+    mqtt_password: "8210",
   } as MQTTState,
 
   getters: {

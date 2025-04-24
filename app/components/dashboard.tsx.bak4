@@ -1305,14 +1305,21 @@ export default function Dashboard() {
         client.subscribe(`extwork/inverter${i}/tank${i}_level`);
       }
       
-      // 서버 연결
-      const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
+       // 서버 연결 - 실행 환경에 따라 적절한 주소 사용
+      const hostname = window.location.hostname;
+      let serverUrl;
       
-      client.connect(serverUrl, 'dnature', 'XihQ2Q%RaS9u#Z3g');
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+      } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+        serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+      } else {
+        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+      }
+      
+      console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
+      client.connect(serverUrl, 'dnature', '8210');
       setMqttClient(client);
-    }
   };
   
   // 토픽 직접 게시 함수 (STATUS 메시지 필터링)

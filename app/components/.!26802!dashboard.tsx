@@ -516,7 +516,11 @@ export default function Dashboard() {
     
     // 자동으로 연결 시작
     console.log("MQTT 브로커에 연결 시도...");
-    client.connect();  // 기본 URL과 인증 정보를 사용하도록 수정
+    const serverUrl = process.env.NODE_ENV === 'development' 
+      ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
+      : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
+    
+    client.connect(serverUrl, 'dnature', '8210'); // 사용자 이름과 비밀번호도 업데이트
 
     // 컴포넌트 언마운트 시 연결 종료
     return () => {
@@ -726,7 +730,7 @@ export default function Dashboard() {
             let rawJson = messageStr;
             if (rawJson && rawJson.length > 10000) {
               console.warn(`메시지 크기가 너무 큽니다: ${rawJson.length} 바이트. 잘라냅니다.`);
-              rawJson = rawJson.substring(0, 10000) + "... (메시지 크기 초과로 잘림)";
+              rawJson = rawJson.substring(0, 10000) + "... (메시지 크기 초과로 잘림)`);
             }
             
             // 로그 추가 - 최신 메시지가 맨 앞에 오도록 변경
@@ -745,7 +749,7 @@ export default function Dashboard() {
             let displayMessage = messageStr;
             if (displayMessage && displayMessage.length > 10000) {
               console.warn(`텍스트 메시지 크기가 너무 큽니다: ${displayMessage.length} 바이트. 잘라냅니다.`);
-              displayMessage = displayMessage.substring(0, 10000) + "... (메시지 크기 초과로 잘림)";
+              displayMessage = displayMessage.substring(0, 10000) + "... (메시지 크기 초과로 잘림)`);
             }
             
             setProgressMessages(prev => {
@@ -1242,12 +1246,20 @@ export default function Dashboard() {
         client.subscribe(getPumpStateTopic(i));
       }
       
-      // 서버 연결
-      const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
+      // 서버 연결 - 실행 환경에 따라 적절한 주소 사용
+      const hostname = window.location.hostname;
+      let serverUrl;
       
-      client.connect(serverUrl, 'dnature', 'XihQ2Q%RaS9u#Z3g');
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+      } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+        serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+      } else {
+        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+      }
+      
+      console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
+      client.connect(serverUrl, 'dnature', '8210');
       setMqttClient(client);
     }
   };
