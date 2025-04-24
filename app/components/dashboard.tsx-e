@@ -490,11 +490,11 @@ export default function Dashboard() {
         rawJson: JSON.stringify(err)
       });
     });
-    
+
     console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
     client.connect(serverUrl, 'dnature', '8210');
     setMqttClient(client);
-    
+
     // 컴포넌트 언마운트 시 연결 종료
     return () => {
       console.log("Dashboard 컴포넌트 언마운트, MQTT 연결 종료");

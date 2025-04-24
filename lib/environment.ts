@@ -137,7 +137,7 @@ const developmentConfig: Partial<EnvironmentConfig> = {
  */
 const productionConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'mqtt://203.234.35.54:1883',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'mqtt://203.234.35.54:',
   mqttUsername: process.env.MQTT_USERNAME || 'dnature',
   mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: process.env.DEBUG_MODE === 'true',

@@ -1296,8 +1296,8 @@ export default function Dashboard() {
       
       // 서버 연결
       const serverUrl = process.env.NODE_ENV === 'development' 
-        ? 'ws://dev.codingpen.com:1884'
-        : 'wss://api.codingpen.com:8884';
+        ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
+        : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
       
       // 환경 변수 또는 기본값 사용
       const mqttUsername = process.env.NEXT_PUBLIC_MQTT_USERNAME || 'guest';

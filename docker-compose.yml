@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:latest
+    container_name: extwork-redis
+    ports:
+      - "20220:6379"
+    command: redis-server --requirepass evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm
+    environment:
+      - REDIS_PASSWORD=evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm
+    volumes:
+      - redis-data:/data
+    restart: always
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: extwork-app
+    ports:
+      - "3000:3000"
+    environment:
+      - REDIS_URL=redis://default:evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm@redis:6379
+      - REDIS_PASSWORD=evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm
+      - REDISHOST=redis
+      - REDISPORT=6379
+      - REDISPASSWORD=evhoGEjfJSVxvxuYtmDjzSYszpGqqRKm
+      - REDISUSER=default
+      - USE_LOCAL_STORAGE=false
+      - PORT=3000
+      - NODE_ENV=production
+    depends_on:
+      - redis
+    restart: always
+
+volumes:
+  redis-data: 

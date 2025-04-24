@@ -95,7 +95,11 @@
       "elapsedTime": "29s",
       "remainingTime": "1s",
       "totalRemainingTime": "00:00:00"
-    }
+    },
+    "valveState": "1000",
+    "valveADesc": "추출순환",
+    "valveBDesc": "닫힘",
+    "valveStatusMessage": "현재 밸브 상태: valveA=ON(추출순환), valveB=OFF(닫힘), valveC=OFF(-), valveD=OFF(-)"
   },
   "sequences": [
     {
