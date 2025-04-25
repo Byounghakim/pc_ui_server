@@ -10,8 +10,8 @@ import MqttClient from '../../lib/mqtt-client';
 // MQTT 서버 설정
 const MQTT_CONFIG = {
   server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development' 
-    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://203.234.35.54:8080'
-    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'wss://203.234.35.54:8080',
+    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 'ws://192.168.0.26:8080'
+    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 'ws://203.234.35.54:8080',
   username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
   password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || '8210'
 };

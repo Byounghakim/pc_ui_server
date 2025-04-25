@@ -101,7 +101,7 @@ export interface ApiRetryConfig {
  */
 const defaultConfig: EnvironmentConfig = {
   apiBaseUrl: '/api',
-  mqttBrokerUrl: 'mqtt://localhost:1883',
+  mqttBrokerUrl: 'ws://localhost:8080',
   mqttUsername: 'dnature',
   mqttPassword: '8210',
   localStoragePath: './local-storage',
@@ -120,7 +120,7 @@ const defaultConfig: EnvironmentConfig = {
  */
 const developmentConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_DEV_SERVER || 'mqtt://203.234.35.54:1883',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_DEV_SERVER || 'ws://203.234.35.54:8080',
   mqttUsername: process.env.MQTT_USERNAME || 'dnature',
   mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: true,
@@ -137,7 +137,7 @@ const developmentConfig: Partial<EnvironmentConfig> = {
  */
 const productionConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'mqtt://203.234.35.54:',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'ws://203.234.35.54:8080',
   mqttUsername: process.env.MQTT_USERNAME || 'dnature',
   mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: process.env.DEBUG_MODE === 'true',
@@ -154,7 +154,7 @@ const productionConfig: Partial<EnvironmentConfig> = {
  */
 const testConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: '/api',
-  mqttBrokerUrl: 'mqtt://203.234.35.54:1883',
+  mqttBrokerUrl: 'ws://203.234.35.54:8080',
   mqttUsername: 'dnature',
   mqttPassword: '8210',
   localStoragePath: './test-storage',
