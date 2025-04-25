@@ -20,6 +20,9 @@ export const isProduction = process.env.NODE_ENV === 'production';
 // 테스트 환경인지 확인
 export const isTest = process.env.NODE_ENV === 'test';
 
+// HTTPS 환경인지 감지
+export const isHttps = isBrowser && window.location.protocol === 'https:';
+
 // 클라우드 환경인지 확인 (Railway, Vercel, Netlify 등)
 export const isCloudEnvironment = () => {
   if (isServer) {
@@ -101,7 +104,7 @@ export interface ApiRetryConfig {
  */
 const defaultConfig: EnvironmentConfig = {
   apiBaseUrl: '/api',
-  mqttBrokerUrl: 'ws://localhost:8080',
+  mqttBrokerUrl: `${isBrowser && isHttps ? 'wss' : 'ws'}://localhost:${isBrowser && isHttps ? '8443' : '8080'}`,
   mqttUsername: 'dnature',
   mqttPassword: '8210',
   localStoragePath: './local-storage',
@@ -120,7 +123,8 @@ const defaultConfig: EnvironmentConfig = {
  */
 const developmentConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_DEV_SERVER || 'ws://203.234.35.54:8080',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_DEV_SERVER || 
+                `${isBrowser && isHttps ? 'wss' : 'ws'}://203.234.35.54:${isBrowser && isHttps ? '8443' : '8080'}`,
   mqttUsername: process.env.MQTT_USERNAME || 'dnature',
   mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: true,
@@ -137,7 +141,8 @@ const developmentConfig: Partial<EnvironmentConfig> = {
  */
 const productionConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_URL || '/api',
-  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 'ws://203.234.35.54:8080',
+  mqttBrokerUrl: process.env.NEXT_PUBLIC_MQTT_PROD_SERVER || 
+                `${isBrowser && isHttps ? 'wss' : 'ws'}://203.234.35.54:${isBrowser && isHttps ? '8443' : '8080'}`,
   mqttUsername: process.env.MQTT_USERNAME || 'dnature',
   mqttPassword: process.env.MQTT_PASSWORD || '8210',
   debugMode: process.env.DEBUG_MODE === 'true',
@@ -154,7 +159,7 @@ const productionConfig: Partial<EnvironmentConfig> = {
  */
 const testConfig: Partial<EnvironmentConfig> = {
   apiBaseUrl: '/api',
-  mqttBrokerUrl: 'ws://203.234.35.54:8080',
+  mqttBrokerUrl: `${isBrowser && isHttps ? 'wss' : 'ws'}://203.234.35.54:${isBrowser && isHttps ? '8443' : '8080'}`,
   mqttUsername: 'dnature',
   mqttPassword: '8210',
   localStoragePath: './test-storage',
@@ -238,4 +243,11 @@ export function debugLog(...args: any[]): void {
   if (getEnvironmentConfig().debugMode) {
     console.log('[DEBUG]', ...args);
   }
+}
+
+/**
+ * 적절한 MQTT 프로토콜 선택 (HTTP → ws, HTTPS → wss)
+ */
+export function getMqttProtocol(): 'ws' | 'wss' {
+  return isHttps ? 'wss' : 'ws';
 } 
