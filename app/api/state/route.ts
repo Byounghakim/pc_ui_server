@@ -35,9 +35,10 @@ const CACHE_TTL_MS = 300000; // 5분 캐싱
 
 // CORS 헤더 설정
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': 'http://localhost:3000',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Credentials': 'true'
 };
 
 /**
@@ -223,15 +224,15 @@ export async function GET(request: NextRequest) {
           logger.debug(`키 '${key}'에 대한 값 찾음`);
           logGroup.end();
           try {
-            return NextResponse.json(JSON.parse(value));
+            return NextResponse.json(JSON.parse(value), { headers: corsHeaders });
           } catch {
-            return NextResponse.json(value);
+            return NextResponse.json(value, { headers: corsHeaders });
           }
         }
         
         logger.debug(`키 '${key}'에 대한 값 없음`);
         logGroup.end();
-        return NextResponse.json({ error: `키 '${key}'에 대한 값을 찾을 수 없음` }, { status: 404 });
+        return NextResponse.json({ error: `키 '${key}'에 대한 값을 찾을 수 없음` }, { status: 404, headers: corsHeaders });
       }
       
       // 모든 키 요청인 경우
@@ -251,7 +252,7 @@ export async function GET(request: NextRequest) {
       
       logger.debug(`${Object.keys(result).length}개 키 값 로드 성공`);
       logGroup.end();
-      return NextResponse.json(result);
+      return NextResponse.json(result, { headers: corsHeaders });
     }
     
     // 로컬 스토리지 사용
@@ -263,28 +264,28 @@ export async function GET(request: NextRequest) {
         if (key in localData) {
           logger.debug(`로컬 스토리지에서 키 '${key}'에 대한 값 찾음`);
           logGroup.end();
-          return NextResponse.json(localData[key]);
+          return NextResponse.json(localData[key], { headers: corsHeaders });
         }
         
         logger.debug(`로컬 스토리지에서 키 '${key}'에 대한 값 없음`);
         logGroup.end();
-        return NextResponse.json({ error: `키 '${key}'에 대한 값을 찾을 수 없음` }, { status: 404 });
+        return NextResponse.json({ error: `키 '${key}'에 대한 값을 찾을 수 없음` }, { status: 404, headers: corsHeaders });
       }
       
       // 모든 키 요청인 경우
       logger.debug(`로컬 스토리지에서 ${Object.keys(localData).length}개 키 값 로드 성공`);
       logGroup.end();
-      return NextResponse.json(localData);
+      return NextResponse.json(localData, { headers: corsHeaders });
     }
     
     // 저장소에 연결할 수 없는 경우
     logger.error('사용 가능한 저장소 없음');
     logGroup.end();
-    return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500 });
+    return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500, headers: corsHeaders });
   } catch (error) {
     logger.error('상태 조회 중 오류 발생:', error);
     logGroup.end();
-    return NextResponse.json({ error: '상태 조회 중 오류 발생' }, { status: 500 });
+    return NextResponse.json({ error: '상태 조회 중 오류 발생' }, { status: 500, headers: corsHeaders });
   }
 }
 
@@ -305,7 +306,7 @@ export async function POST(request: NextRequest) {
       if (!rawText || rawText.trim() === '') {
         logger.warn('요청 본문이 비어 있음');
         logGroup.end();
-        return NextResponse.json({ error: '요청 본문이 비어 있음' }, { status: 400 });
+        return NextResponse.json({ error: '요청 본문이 비어 있음' }, { status: 400, headers: corsHeaders });
       }
       
       // JSON 파싱 시도
@@ -314,7 +315,7 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       logger.error('요청 본문 파싱 실패:', error);
       logGroup.end();
-      return NextResponse.json({ error: '유효하지 않은 JSON 데이터' }, { status: 400 });
+      return NextResponse.json({ error: '유효하지 않은 JSON 데이터' }, { status: 400, headers: corsHeaders });
     }
     
     // 키 파라미터 확인
@@ -335,7 +336,7 @@ export async function POST(request: NextRequest) {
         
         logger.info(`상태가 키 '${key}'에 성공적으로 저장됨`);
         logGroup.end();
-        return NextResponse.json({ message: `상태가 키 '${key}'에 성공적으로 저장됨` });
+        return NextResponse.json({ message: `상태가 키 '${key}'에 성공적으로 저장됨` }, { headers: corsHeaders });
       }
       
       // 로컬 스토리지에 저장
@@ -346,17 +347,17 @@ export async function POST(request: NextRequest) {
         if (success) {
           logger.info(`상태가 키 '${key}'에 로컬 스토리지에 성공적으로 저장됨`);
           logGroup.end();
-          return NextResponse.json({ message: `상태가 키 '${key}'에 로컬 스토리지에 성공적으로 저장됨` });
+          return NextResponse.json({ message: `상태가 키 '${key}'에 로컬 스토리지에 성공적으로 저장됨` }, { headers: corsHeaders });
         } else {
           logger.error(`키 '${key}'에 대한 상태 저장 실패`);
           logGroup.end();
-          return NextResponse.json({ error: '상태 저장 실패' }, { status: 500 });
+          return NextResponse.json({ error: '상태 저장 실패' }, { status: 500, headers: corsHeaders });
         }
       }
       
       logger.error('사용 가능한 저장소 없음');
       logGroup.end();
-      return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500 });
+      return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500, headers: corsHeaders });
     } 
     // 키가 제공되지 않은 경우, 본문 자체를 상태로 처리
     else if (typeof body === 'object' && !Array.isArray(body)) {
@@ -374,7 +375,7 @@ export async function POST(request: NextRequest) {
         
         logger.info(`${Object.keys(body).length}개 키에 대한 상태가 성공적으로 저장됨`);
         logGroup.end();
-        return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 성공적으로 저장됨` });
+        return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 성공적으로 저장됨` }, { headers: corsHeaders });
       }
       
       // 로컬 스토리지에 저장
@@ -384,28 +385,28 @@ export async function POST(request: NextRequest) {
         if (success) {
           logger.info(`${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨`);
           logGroup.end();
-          return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨` });
+          return NextResponse.json({ message: `${Object.keys(body).length}개 키에 대한 상태가 로컬 스토리지에 성공적으로 저장됨` }, { headers: corsHeaders });
     } else {
           logger.error('상태 저장 실패');
           logGroup.end();
-          return NextResponse.json({ error: '상태 저장 실패' }, { status: 500 });
+          return NextResponse.json({ error: '상태 저장 실패' }, { status: 500, headers: corsHeaders });
         }
       }
       
       logger.error('사용 가능한 저장소 없음');
       logGroup.end();
-      return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500 });
+      return NextResponse.json({ error: '저장소에 연결할 수 없음' }, { status: 500, headers: corsHeaders });
     }
     
     // 키도 없고 객체도 아닌 경우
     logger.warn('유효하지 않은 요청 형식: 키 파라미터가 없고 요청 본문이 객체가 아님');
     logGroup.end();
-    return NextResponse.json({ error: '유효하지 않은 요청 형식' }, { status: 400 });
+    return NextResponse.json({ error: '유효하지 않은 요청 형식' }, { status: 400, headers: corsHeaders });
     
   } catch (error) {
     logger.error('상태 저장 중 오류 발생:', error);
     logGroup.end();
-    return NextResponse.json({ error: '상태 저장 중 오류 발생' }, { status: 500 });
+    return NextResponse.json({ error: '상태 저장 중 오류 발생' }, { status: 500, headers: corsHeaders });
   }
 }
 

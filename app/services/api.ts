@@ -36,7 +36,8 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
     
     const response = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
-      signal: controller.signal
+      signal: controller.signal,
+      credentials: 'include'
     });
     
     clearTimeout(timeoutId);
@@ -95,7 +96,8 @@ export const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ sequences: sequences }),
-      signal: controller.signal
+      signal: controller.signal,
+      credentials: 'include'
     });
     
     clearTimeout(timeoutId);
@@ -127,7 +129,8 @@ export const loadSequencesFromServer = async (): Promise<PumpSequence[] | null> 
     const timeoutId = setTimeout(() => controller.abort(), 5000); // 5초 타임아웃
     
     const response = await fetch(`${API_BASE_URL}/sequences`, {
-      signal: controller.signal
+      signal: controller.signal,
+      credentials: 'include'
     });
     
     clearTimeout(timeoutId);
@@ -165,7 +168,8 @@ export const saveStateToServer = async (state: any): Promise<boolean> => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ 'system:state': state }),
-      signal: controller.signal
+      signal: controller.signal,
+      credentials: 'include'
     });
     
     clearTimeout(timeoutId);
@@ -198,7 +202,8 @@ export const loadStateFromServer = async (): Promise<any | null> => {
     
     // 특정 키의 상태만 요청
     const response = await fetch(`${API_BASE_URL}/state?key=system:state`, {
-      signal: controller.signal
+      signal: controller.signal,
+      credentials: 'include'
     });
     
     clearTimeout(timeoutId);

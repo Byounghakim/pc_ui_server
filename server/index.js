@@ -12,8 +12,14 @@ const DATA_DIR = path.join(__dirname, '..', 'data');
 const SEQUENCES_FILE = path.join(DATA_DIR, 'sequences.json');
 const STATE_FILE = path.join(DATA_DIR, 'system-state.json');
 
-// 미들웨어 설정
-app.use(cors());
+// CORS 설정 강화
+app.use(cors({
+  origin: ['http://localhost:3000', 'https://extwork-client.vercel.app', 'https://extwork-dashboard.vercel.app'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(bodyParser.json());
 
 // 헬스 체크 엔드포인트 추가
