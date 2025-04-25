@@ -1,7 +1,11 @@
 import { PumpSequence, WorkLog, AutomationProcess, LogRetentionPolicy } from '../types';
 
 // API 기본 URL - Next.js API 라우트 사용 (포트가 3000)
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+// 기존 코드에서 Railway 서버 URL을 직접 사용하지 않도록 수정
+// const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
+const API_BASE_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
+  ? '/api'  // 로컬 개발 환경에서는 상대 경로 사용
+  : process.env.NEXT_PUBLIC_API_URL || '/api';
 
 // 서버 연결 상태를 저장하는 변수
 let isServerConnected = false; // 기본값을 false로 설정
@@ -37,7 +41,7 @@ export const checkServerConnection = async (forceCheck = false, showLog = false)
     const response = await fetch(`${API_BASE_URL}/health`, {
       method: 'GET',
       signal: controller.signal,
-      credentials: 'include'
+      credentials: 'same-origin'
     });
     
     clearTimeout(timeoutId);
@@ -97,7 +101,7 @@ export const saveSequencesToServer = async (sequences: PumpSequence[]): Promise<
       },
       body: JSON.stringify({ sequences: sequences }),
       signal: controller.signal,
-      credentials: 'include'
+      credentials: 'same-origin'
     });
     
     clearTimeout(timeoutId);
@@ -130,7 +134,7 @@ export const loadSequencesFromServer = async (): Promise<PumpSequence[] | null> 
     
     const response = await fetch(`${API_BASE_URL}/sequences`, {
       signal: controller.signal,
-      credentials: 'include'
+      credentials: 'same-origin'
     });
     
     clearTimeout(timeoutId);
@@ -169,7 +173,7 @@ export const saveStateToServer = async (state: any): Promise<boolean> => {
       },
       body: JSON.stringify({ 'system:state': state }),
       signal: controller.signal,
-      credentials: 'include'
+      credentials: 'same-origin'
     });
     
     clearTimeout(timeoutId);
@@ -203,7 +207,7 @@ export const loadStateFromServer = async (): Promise<any | null> => {
     // 특정 키의 상태만 요청
     const response = await fetch(`${API_BASE_URL}/state?key=system:state`, {
       signal: controller.signal,
-      credentials: 'include'
+      credentials: 'same-origin'
     });
     
     clearTimeout(timeoutId);

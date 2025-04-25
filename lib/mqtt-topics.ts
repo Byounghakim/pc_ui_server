@@ -324,9 +324,10 @@ export function getDefaultTankSystemData(totalTanks: number = 6): TankSystemData
 
 // MQTT 기본 설정
 export const MQTT_SERVER_CONFIG = {
-  PROD: 'wss://203.234.35.54:8080',
-  DEV: 'ws://203.234.35.54:8080',
-  DEV_REMOTE: 'ws://203.234.35.54:8080'
+  PROD: 'wss://203.234.35.54:8443',  // HTTPS 환경에서는 WSS 프로토콜과 8443 포트 사용
+  DEV: 'ws://203.234.35.54:8080',    // HTTP 환경에서는 WS 프로토콜과 8080 포트 사용
+  TCP: 'mqtt://203.234.35.54:1883',  // 일반 MQTT 클라이언트는 TCP 프로토콜과 1883 포트 사용
+  LOCAL: 'ws://localhost:8080'       // 로컬 개발 환경
 };
 
 // MQTT 토픽 상수 정의

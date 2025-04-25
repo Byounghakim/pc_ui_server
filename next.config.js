@@ -27,6 +27,15 @@ const nextConfig = {
   images: {
     domains: ['203.234.35.54'],
   },
+  // API 프록시 설정 추가 - 로컬에서 개발할 때 CORS 문제 해결
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: process.env.NEXT_PUBLIC_API_URL ? `${process.env.NEXT_PUBLIC_API_URL}/:path*` : '/api/:path*',
+      },
+    ];
+  },
   // webpack 설정 추가
   webpack: (config, { isServer }) => {
     // 클라이언트 측에서만 필요한 설정

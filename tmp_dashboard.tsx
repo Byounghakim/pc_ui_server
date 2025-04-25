@@ -547,8 +547,28 @@ export default function Dashboard() {
   useEffect(() => {
     console.log("MQTT 클라이언트 초기화 시작 - 현재 위치:", window.location.href);
     
-    // MQTT 클라이언트 생성
-    const client = new MqttClient();
+    // 호스트명에 따라 서버 URL 결정 (HTTP/HTTPS 감지)
+    const hostname = window.location.hostname;
+    let serverUrl = '';
+    
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      serverUrl = window.location.protocol === 'https:' 
+        ? 'wss://127.0.0.1:8443' 
+        : 'ws://127.0.0.1:8080';
+    } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+      serverUrl = window.location.protocol === 'https:' 
+        ? 'wss://192.168.0.26:8443' 
+        : 'ws://192.168.0.26:8080';
+    } else {
+      serverUrl = window.location.protocol === 'https:' 
+        ? 'wss://203.234.35.54:8443' 
+        : 'ws://203.234.35.54:8080';
+    }
+    
+    console.log("MQTT 서버 URL:", serverUrl);
+    
+    // MQTT 클라이언트 생성 (URL 전달)
+    const client = new MqttClient(serverUrl);
 
     client.on('connect', () => {
       console.log("MQTT 브로커에 연결 성공!");
@@ -617,24 +637,6 @@ export default function Dashboard() {
     
     // 자동으로 연결 시작
     console.log("MQTT 브로커에 연결 시도...");
-    const hostname = window.location.hostname;
-    let serverUrl;
-
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      serverUrl = window.location.protocol === 'https:' 
-        ? 'wss://127.0.0.1:8443' 
-        : 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
-    } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
-      serverUrl = window.location.protocol === 'https:' 
-        ? 'wss://192.168.0.26:8443' 
-        : 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
-    } else {
-      serverUrl = window.location.protocol === 'https:' 
-        ? 'wss://203.234.35.54:8443' 
-        : 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
-    }
-
-    console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
     client.connect(serverUrl, 'dnature', '8210');
     setMqttClient(client);
     

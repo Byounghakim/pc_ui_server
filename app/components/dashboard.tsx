@@ -35,8 +35,12 @@ import WorkLogBook from './work-log/work-log-book'
 import AutomationProcess from './AutomationProcess'; // 자동화 공정 컴포넌트 import
 import { v4 as uuidv4 } from 'uuid'
 import { ClockIcon } from 'lucide-react'
-import type { TankSystem, Tank } from "@/interface/tank" // type으로 임포트
+import type { TankSystem } from "@/interface/tank" // type으로 임포트
 import { toast } from "@/components/ui/use-toast" // toast 임포트 추가
+import { 
+  EXTRACTION_INPUT_TOPIC,
+  MQTT_SERVER_CONFIG
+} from '../../lib/mqtt-topics';
 
 // 카메라 구독 및 명령 토픽 형식
 const CAM_COMMAND_TOPIC = "extwork/cam%d/command";
@@ -1291,77 +1295,6 @@ export default function Dashboard() {
       client.subscribe(PROCESS_PROGRESS_TOPIC);
       client.subscribe(ERROR_TOPIC);
       
-      // 메시지 핸들러 등록
-      client.on('message', (topic, message) => {
-        const messageStr = message.toString();
-        
-        if (topic === VALVE_STATE_TOPIC) {
-          // 밸브 상태 업데이트
-          console.log('밸브 상태 메시지:', messageStr);
-          setCurrentValveState(messageStr);
-          
-          // 탱크 시스템 데이터 업데이트
-          setTankData(prev => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              valveState: messageStr
-            };
-          });
-        } 
-        else if (topic === PROCESS_PROGRESS_TOPIC) {
-          // 진행 상태 업데이트
-          try {
-            const progressData = JSON.parse(messageStr);
-            setProgressData(progressData);
-            
-            // 진행률이 포함된 경우
-            if (progressData.percent) {
-              const percentValue = parseInt(progressData.percent.replace('%', ''));
-              setProgress(percentValue);
-            }
-            
-            // 탱크 시스템 데이터 업데이트 - 진행 정보 포함
-            setTankData(prev => {
-              if (!prev) return prev;
-              
-              return {
-                ...prev,
-                progressInfo: {
-                  step: progressData.step || '',
-                  elapsedTime: progressData.elapsed_time || '00:00:00',
-                  remainingTime: progressData.remaining_time || '00:00:00',
-                  totalRemainingTime: progressData.total_remaining_time || '00:00:00'
-                }
-              };
-            });
-            
-            // 메시지 기록
-            addProgressMessage({
-              timestamp: Date.now(),
-              message: progressData.step || "진행 정보",
-              rawJson: messageStr
-            });
-          } catch (error) {
-            console.error('진행 메시지 파싱 오류:', error);
-          }
-        }
-        
-        // 오류 관련 메시지
-        if (topic === ERROR_TOPIC) {
-          console.error('MQTT 오류 메시지:', messageStr);
-          
-          // 메시지 기록 - 오류는 별도 표시
-          addProgressMessage({
-            timestamp: Date.now(),
-            message: `오류: ${messageStr}`,
-            rawJson: messageStr
-          });
-        }
-        
-        // 상태 메시지 관련해서는 특별한 처리가 필요하지 않음 - 자동으로 저장됨
-      });
-      
       // 탱크 레벨 및 펌프 상태 토픽 구독
       for (let i = 1; i <= 6; i++) {
         client.subscribe(getTankLevelTopic(i));
@@ -1378,20 +1311,20 @@ export default function Dashboard() {
       let serverUrl;
       
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        // 같은 PC에서 실행 중일 때
+        // 로컬 개발 환경
         serverUrl = window.location.protocol === 'https:' 
-          ? 'wss://127.0.0.1:8443' 
-          : 'ws://127.0.0.1:8080';
+          ? 'wss://127.0.0.1:8443'  // HTTPS 환경에서는 WSS (8443)
+          : 'ws://127.0.0.1:8080'; // HTTP 환경에서는 WS (8080)
       } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
-        // 내부 네트워크에서 접근할 때
+        // 내부 네트워크
         serverUrl = window.location.protocol === 'https:' 
-          ? 'wss://192.168.0.26:8443' 
-          : 'ws://192.168.0.26:8080';
+          ? 'wss://192.168.0.26:8443'  // HTTPS 환경에서는 WSS (8443)
+          : 'ws://192.168.0.26:8080';  // HTTP 환경에서는 WS (8080)
       } else {
-        // 외부에서 접근할 때
+        // 외부 접속
         serverUrl = window.location.protocol === 'https:' 
-          ? 'wss://203.234.35.54:8443' 
-          : 'ws://203.234.35.54:8080';
+          ? 'wss://203.234.35.54:8443'  // HTTPS 환경에서는 WSS (8443)
+          : 'ws://203.234.35.54:8080';  // HTTP 환경에서는 WS (8080)
       }
       
       // MQTT 연결 이벤트 핸들러 추가
