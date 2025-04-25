@@ -617,11 +617,26 @@ export default function Dashboard() {
     
     // 자동으로 연결 시작
     console.log("MQTT 브로커에 연결 시도...");
-    const serverUrl = process.env.NODE_ENV === 'development' 
-      ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
-      : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
-    
-    client.connect(serverUrl, 'dnature', '8210'); // 사용자 이름과 비밀번호도 업데이트
+    const hostname = window.location.hostname;
+    let serverUrl;
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      serverUrl = window.location.protocol === 'https:' 
+        ? 'wss://127.0.0.1:8443' 
+        : 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+    } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
+      serverUrl = window.location.protocol === 'https:' 
+        ? 'wss://192.168.0.26:8443' 
+        : 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+    } else {
+      serverUrl = window.location.protocol === 'https:' 
+        ? 'wss://203.234.35.54:8443' 
+        : 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+    }
+
+    console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');
+    client.connect(serverUrl, 'dnature', '8210');
+    setMqttClient(client);
     
     // 컴포넌트 언마운트 시 연결 종료
     return () => {
@@ -1303,11 +1318,17 @@ export default function Dashboard() {
       let serverUrl;
       
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+        serverUrl = window.location.protocol === 'https:' 
+          ? 'wss://127.0.0.1:8443' 
+          : 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
       } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
-        serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+        serverUrl = window.location.protocol === 'https:' 
+          ? 'wss://192.168.0.26:8443' 
+          : 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
       } else {
-        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+        serverUrl = window.location.protocol === 'https:' 
+          ? 'wss://203.234.35.54:8443' 
+          : 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
       }
       
       console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');

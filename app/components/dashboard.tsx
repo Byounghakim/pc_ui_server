@@ -1378,11 +1378,20 @@ export default function Dashboard() {
       let serverUrl;
       
       if (hostname === 'localhost' || hostname === '127.0.0.1') {
-        serverUrl = 'ws://127.0.0.1:8080'; // 같은 PC에서 실행 중일 때
+        // 같은 PC에서 실행 중일 때
+        serverUrl = window.location.protocol === 'https:' 
+          ? 'wss://127.0.0.1:8443' 
+          : 'ws://127.0.0.1:8080';
       } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
-        serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
+        // 내부 네트워크에서 접근할 때
+        serverUrl = window.location.protocol === 'https:' 
+          ? 'wss://192.168.0.26:8443' 
+          : 'ws://192.168.0.26:8080';
       } else {
-        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+        // 외부에서 접근할 때
+        serverUrl = window.location.protocol === 'https:' 
+          ? 'wss://203.234.35.54:8443' 
+          : 'ws://203.234.35.54:8080';
       }
       
       // MQTT 연결 이벤트 핸들러 추가
