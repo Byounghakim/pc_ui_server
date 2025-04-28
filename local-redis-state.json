@@ -1,7 +1,6 @@
 {
   "automation:processes": "{\"processes\":[{\"id\":\"288a2e8a-2909-40ba-a178-33772dd4fefb\",\"name\":\"기본 작업목록 프로세스\",\"sequences\":[{\"name\":\"1\",\"operation_mode\":11,\"repeats\":1,\"process\":[0,5,5,5,5,5],\"selectedPumps\":[false,true,true,true,true,true],\"individualRepeats\":{\"0\":2,\"1\":0,\"2\":0},\"wait_time\":5,\"id\":\"c1dc1518-3676-4952-9f27-3ac6f4510eb1\",\"updatedAt\":\"2025-04-13T23:55:18.229Z\",\"createdAt\":\"2025-04-13T22:55:47.589Z\",\"processId\":\"288a2e8a-2909-40ba-a178-33772dd4fefb\",\"processName\":\"기본 작업목록 프로세스\"},{\"name\":\"2\",\"operation_mode\":21,\"repeats\":1,\"process\":[0,0,0,5,2,0,5,2,0,0,0,0,0,0,0,0,0,0],\"selectedPumps\":[false,true,true,false,false,false],\"individualRepeats\":{\"0\":2,\"1\":0,\"2\":0},\"id\":\"804d7a6e-7b83-4bde-8434-3ea00d0ba17b\",\"updatedAt\":\"2025-04-13T23:55:18.229Z\",\"createdAt\":\"2025-04-13T22:55:47.589Z\",\"processId\":\"288a2e8a-2909-40ba-a178-33772dd4fefb\",\"processName\":\"기본 작업목록 프로세스\"},{\"name\":\"3\",\"operation_mode\":31,\"repeats\":1,\"process\":[0,0,0,0,0,0,0,0,10,5,10,5],\"selectedPumps\":[false,false,false,false,true,true],\"individualRepeats\":{\"0\":2,\"1\":0,\"2\":0},\"id\":\"c119d3f9-ba7d-4a79-872c-c9ae87e6772f\",\"updatedAt\":\"2025-04-13T23:55:18.229Z\",\"createdAt\":\"2025-04-13T22:55:47.589Z\",\"processId\":\"288a2e8a-2909-40ba-a178-33772dd4fefb\",\"processName\":\"기본 작업목록 프로세스\"},{\"name\":\"이동1(본탱크-순환탱크6)\",\"operation_mode\":22,\"repeats\":1,\"process\":[60,5,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"selectedPumps\":[true,false,false,false,false,false],\"individualRepeats\":{\"0\":11},\"id\":\"897e699b-8f94-463a-b091-d8d8d8670bde\",\"updatedAt\":\"2025-04-13T23:55:18.229Z\",\"createdAt\":\"2025-04-13T22:55:47.589Z\",\"processId\":\"288a2e8a-2909-40ba-a178-33772dd4fefb\",\"processName\":\"기본 작업목록 프로세스\"},{\"name\":\"이동1(본탱크-순환탱크6)\",\"operation_mode\":21,\"repeats\":1,\"process\":[0,0,0,60,5,12,60,5,12,60,5,12,60,5,12,60,5,12],\"selectedPumps\":[false,true,true,true,true,true],\"individualRepeats\":{\"1\":12,\"2\":12,\"3\":12,\"4\":12,\"5\":12},\"id\":\"72758e06-9b92-4101-b91f-fd6fbfa508f3\",\"updatedAt\":\"2025-04-13T23:55:18.229Z\",\"createdAt\":\"2025-04-13T22:55:47.589Z\",\"processId\":\"288a2e8a-2909-40ba-a178-33772dd4fefb\",\"processName\":\"기본 작업목록 프로세스\"}],\"createdAt\":\"2025-04-13T22:48:13.629Z\",\"updatedAt\":\"2025-04-13T23:55:18.228Z\"}]}",
   "system:state": {
-    "success": true,
     "valve": {
       "state": "0000",
       "description": {
@@ -24,8 +23,7 @@
         "volume": 0,
         "status": "empty",
         "pumpStatus": "OFF",
-        "inverter": 1,
-        "connectionType": "WiFi"
+        "inverter": 1
       },
       {
         "id": 2,
@@ -89,17 +87,8 @@
         }
       }
     },
-    "timestamp": 1745496731517,
-    "progressInfo": {
-      "step": "",
-      "elapsedTime": "29s",
-      "remainingTime": "1s",
-      "totalRemainingTime": "00:00:00"
-    },
-    "valveState": "1000",
-    "valveADesc": "추출순환",
-    "valveBDesc": "닫힘",
-    "valveStatusMessage": "현재 밸브 상태: valveA=ON(추출순환), valveB=OFF(닫힘), valveC=OFF(-), valveD=OFF(-)"
+    "timestamp": 1745808798396,
+    "fromCache": true
   },
   "sequences": [
     {
