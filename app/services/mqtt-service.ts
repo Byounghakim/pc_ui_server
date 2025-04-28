@@ -9,14 +9,24 @@ import MqttClient from '../../lib/mqtt-client';
 
 // MQTT 서버 설정
 const MQTT_CONFIG = {
-  server: typeof process !== 'undefined' && process.env.NODE_ENV === 'development' 
-    ? process.env.NEXT_PUBLIC_MQTT_DEV_URL || 
-      `${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws'}://192.168.0.26:${typeof window !== 'undefined' && window.location.protocol === 'https:' ? '8443' : '8080'}`
-    : process.env.NEXT_PUBLIC_MQTT_PROD_URL || 
-      `${typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws'}://203.234.35.54:${typeof window !== 'undefined' && window.location.protocol === 'https:' ? '8443' : '8080'}`,
+  server: (() => {
+    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'development') {
+      // 개발환경 - 로컬 네트워크 접속
+      if (typeof window !== 'undefined') {
+        return window.location.protocol === 'https:'
+          ? 'wss://192.168.0.26:8443'
+          : 'ws://192.168.0.26:8080';
+      }
+      return 'ws://192.168.0.26:8080'; // fallback
+    } else {
+      // 운영환경 - Railway 접속
+      return 'wss://203.234.35.54:8443'; // 무조건 wss
+    }
+  })(),
   username: process.env.NEXT_PUBLIC_MQTT_USERNAME || 'dnature',
   password: process.env.NEXT_PUBLIC_MQTT_PASSWORD || '8210'
 };
+
 
 // MqttClient 인스턴스 생성
 const mqttClient = new MqttClient();

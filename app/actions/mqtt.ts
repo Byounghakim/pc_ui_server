@@ -57,9 +57,9 @@ const getClient = () => {
   if (typeof window === "undefined") return null;
 
   if (!client) {
-    client = mqtt.connect("wss://api.codingpen.com:8884", {
+    client = mqtt.connect("wss://203.234.35.54:8883", {
       username: "dnature",
-      password: "XihQ2Q%RaS9u#Z3g",
+      password: "8210",
       protocol: "wss",
       reconnectPeriod: 10000,
       connectTimeout: 60000,

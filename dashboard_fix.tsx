@@ -529,7 +529,7 @@ export default function Dashboard() {
     console.log("MQTT 브로커에 연결 시도...");
     const serverUrl = process.env.NODE_ENV === 'development' 
       ? 'ws://203.234.35.54:8080' // 새로운 개발 서버 URL
-      : 'wss://203.234.35.54:8080'; // 새로운 프로덕션 서버 URL
+      : 'wss://203.234.35.54:8443'; // 새로운 프로덕션 서버 URL
     
     client.connect(serverUrl, 'dnature', '8210'); // 사용자 이름과 비밀번호도 업데이트
 
@@ -1341,9 +1341,8 @@ export default function Dashboard() {
           ? 'wss://192.168.0.26:8443' 
           : 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
       } else {
-        serverUrl = window.location.protocol === 'https:' 
-          ? 'wss://203.234.35.54:8443' 
-          : 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+        // 외부는 무조건 wss
+         serverUrl = 'wss://203.234.35.54:8443'; 
       }
       
       console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');

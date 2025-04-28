@@ -324,7 +324,7 @@ export function getDefaultTankSystemData(totalTanks: number = 6): TankSystemData
 
 // MQTT 기본 설정
 export const MQTT_SERVER_CONFIG = {
-  PROD: 'wss://203.234.35.54:8080',
+  PROD: 'wss://203.234.35.54:8443',
   DEV: 'ws://203.234.35.54:8080',
   DEV_REMOTE: 'ws://203.234.35.54:8080'
 };
