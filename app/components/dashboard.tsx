@@ -1,7 +1,7 @@
 "use client"
 
 import dynamic from 'next/dynamic'
-import { useState, useEffect, useRef, useCallback, useMemo } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react" // useRef 추가
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -3485,7 +3485,7 @@ export default function Dashboard() {
   const [showScheduleDialog, setShowScheduleDialog] = useState<{name: string, mode: 'configure' | 'run'} | null>(null);
   const [waitTime, setWaitTime] = useState<number>(60); // 기본 대기시간 1분
   const [nextOrderNumber, setNextOrderNumber] = useState<number>(1);
-  const scheduleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const scheduleTimerRef = useRef<NodeJS.Timeout | null>(null); // 타이머 참조 초기화
 
   // 예약 추가 함수 (orderNumber는 1~9 사이로 제한)
   const scheduleTask = (taskName: string, waitTime: number, repeats: number) => {
@@ -3727,7 +3727,15 @@ export default function Dashboard() {
       }
     }, 1000);
   };
-  
+ 
+  // 타이머 정지 함수
+  const stopScheduleTimer = () => {
+    if (scheduleTimerRef.current) {
+      clearInterval(scheduleTimerRef.current);
+      scheduleTimerRef.current = null;
+    }
+  };
+
   // 예약된 작업 실행 함수
   const executeScheduledTask = (task: ScheduledTask) => {
     // 작업 진행 버튼 클릭과 동일한 로직 실행
