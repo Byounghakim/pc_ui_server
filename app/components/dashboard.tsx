@@ -1320,6 +1320,9 @@ export default function Dashboard() {
         serverUrl = window.location.protocol === 'https:' 
           ? 'wss://192.168.0.26:8443'  // HTTPS 환경에서는 WSS (8443)
           : 'ws://192.168.0.26:8080';  // HTTP 환경에서는 WS (8080)
+      } else if (hostname.includes('railway.app') || hostname.includes('up.railway.app')) {
+        // Railway 배포 환경
+        serverUrl = 'wss://203.234.35.54:8443';  // Railway 환경에서는 항상 WSS 사용
       } else {
         // 외부 접속
         serverUrl = window.location.protocol === 'https:' 
