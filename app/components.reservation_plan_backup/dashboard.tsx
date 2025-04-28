@@ -1323,7 +1323,7 @@ export default function Dashboard() {
       } else if (hostname === '192.168.0.26' || hostname.startsWith('192.168.')) {
         serverUrl = 'ws://192.168.0.26:8080'; // 내부 네트워크에서 접근할 때
       } else {
-        serverUrl = 'ws://203.234.35.54:8080'; // 외부에서 접근할 때
+        serverUrl = 'wss://203.234.35.54:8443'; // 외부에서 접근할 때
       }
       
       console.log('MQTT 서버 연결 시도:', serverUrl, '(hostname:', hostname, ')');

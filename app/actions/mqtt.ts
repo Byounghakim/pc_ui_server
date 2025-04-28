@@ -57,7 +57,7 @@ const getClient = () => {
   if (typeof window === "undefined") return null;
 
   if (!client) {
-    client = mqtt.connect("wss://203.234.35.54:8883", {
+    client = mqtt.connect("wss://203.234.35.54:8443", {
       username: "dnature",
       password: "8210",
       protocol: "wss",
