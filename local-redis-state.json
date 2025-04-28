@@ -22,7 +22,7 @@
         "level": 0,
         "volume": 0,
         "status": "empty",
-        "pumpStatus": "OFF",
+        "pumpStatus": "ON",
         "inverter": 1
       },
       {
@@ -87,8 +87,12 @@
         }
       }
     },
-    "timestamp": 1745808798396,
-    "fromCache": true
+    "timestamp": 1745812498424,
+    "fromCache": true,
+    "valveState": "1000",
+    "valveADesc": "추출순환",
+    "valveBDesc": "닫힘",
+    "valveStatusMessage": "현재 밸브 상태: valveA=ON(추출순환), valveB=OFF(닫힘), valveC=OFF(-), valveD=OFF(-)"
   },
   "sequences": [
     {
