@@ -286,6 +286,12 @@ type ScheduledTask = {
 export default function Dashboard() {
   const [topic, setTopic] = useState(VALVE_INPUT_TOPIC)
   const [message, setMessage] = useState("")
+  const [processSummary, setProcessSummary] = useState<string[]>([]); // 여기에 추가
+
+  const updateProcessSummary = (message: string) => {
+    setProcessSummary(prev => [message, ...prev]);
+  };
+
   const [mqttClient, setMqttClient] = useState<MqttClient | null>(null)
   const [mqttStatus, setMqttStatus] = useState("연결 중...")
   const [progress, setProgress] = useState(0)
@@ -3680,7 +3686,8 @@ export default function Dashboard() {
         // 3. 카운트다운 중인 작업이 완료되었는지 확인
         else if (nextTask.isRunning && nextTask.scheduledTime <= now) {
           // 작업 실행
-          executeScheduledTask(nextTask);
+          executeScheduledTask(nextTask); // 여기에 await 붙이려면 함수도 async로 바꿔야 함
+
           
           // 작업 완료 표시
           updatedTasks[nextTaskIndex] = { 
@@ -3708,11 +3715,11 @@ export default function Dashboard() {
           }
         }
         
-        return tasksChanged ? updatedTasks : prev;
-      });
       
       // 모든 예약이 완료되면 타이머 정지
-      const allCompleted = scheduledTasks.every(task => !task.isStarted || task.isCompleted);
+      
+      const allCompleted = updatedTasks.every(task => !task.isStarted || task.isCompleted);
+
       if (allCompleted && scheduledTasks.length > 0) {
         setProgressMessages(prev => [{
           timestamp: Date.now(),
@@ -3720,11 +3727,12 @@ export default function Dashboard() {
           rawJson: null
         }, ...prev]);
         
-        // 완료된 모든 작업 제거
-        setScheduledTasks(prev => prev.filter(task => !task.isCompleted));
-        
-        stopScheduleTimer();
+       // 완료된 작업 제거 (선택사항)
+       return updatedTasks.filter(task => !task.isCompleted);
       }
+
+      return tasksChanged ? updatedTasks : prev;
+    });
     }, 1000);
   };
  
@@ -3757,6 +3765,11 @@ export default function Dashboard() {
         return cleanedSeq;
       });
     
+    // 작업 실행 전에 공정 진행 내용 업데이트
+    if (filteredSequences.length > 0) {
+      updateProcessSummary(`작업 ${task.taskName} 실행됨`);
+    }
+
     if (filteredSequences.length > 0 && mqttClient) {
       try {
         // 시퀀스를 MQTT 메시지로 직접 발행
