@@ -740,40 +740,102 @@ const AutomationProcess: React.FC<AutomationProcessProps> = ({
             const newMessage = `[${new Date().toLocaleTimeString()}] 진행 상태: ${displayMessage.substring(0, 50)}${displayMessage.length > 50 ? '...' : ''}`;
             return [newMessage, ...prev].slice(0, 100); // 최대 100개만 유지
           });
+
+
+
+
+
+
+
+
           
-          // JSON 데이터 처리 (시퀀스 완료 감지)
-          try {
-            const data = JSON.parse(messageStr);
-            
-            // 진행 상태 데이터를 기반으로 시퀀스 완료 감지
-            if (data && status === 'running' && currentSequenceIndex >= 0) {
-              const currentSeq = selectedSequences[currentSequenceIndex];
-              
-              // 완료 상태 감지
-              if (data.process_info && data.process_info.includes("완료") && currentSeq && currentSeq.status === 'running') {
-                console.log(`프로세스 완료 상태 감지: ${data.process_info}`);
-                addLog(`시퀀스 ${currentSequenceIndex + 1} 완료됨: ${currentSeq.sequence.name} (${data.process_info})`, true);
-                handleSequenceCompletion(currentSequenceIndex, 'completed', '진행 상태 완료');
-              }
-              // 오류 상태 감지
-              else if (data.process_info && data.process_info.includes("오류") && currentSeq && currentSeq.status === 'running') {
-                console.log(`프로세스 오류 상태 감지: ${data.process_info}`);
-                addLog(`시퀀스 ${currentSequenceIndex + 1} 오류 발생: ${currentSeq.sequence.name} (${data.process_info})`, true);
-                handleSequenceCompletion(currentSequenceIndex, 'error', `진행 상태 오류: ${data.process_info}`);
-              }
-              
-              // 특별한 상태 감지 - 남은 시간이 0이고 작업이 완료된 경우
-              if (data.remaining_time !== undefined && data.remaining_time === "0s" && currentSeq && currentSeq.status === 'running') {
-                console.log(`남은 시간이 0초인 상태 감지, 작업 완료 처리`);
-                addLog(`시퀀스 ${currentSequenceIndex + 1} 남은 시간 0초, 완료 처리: ${currentSeq.sequence.name}`, true);
-                handleSequenceCompletion(currentSequenceIndex, 'completed', '남은 시간 0초');
-              }
-            }
-          } catch (error) {
-            // JSON 파싱 실패해도 무시 (텍스트 메시지일 수 있음)
-            // console.debug('진행 상태 메시지 JSON 파싱 실패 (텍스트 메시지일 수 있음):', error);
-          }
-        }
+
+        
+// ✅ 여기가 적절한 위치입니다!
+if (topic === PROCESS_PROGRESS_TOPIC) {
+  resetProgressTimeout();
+}
+
+
+
+
+
+
+// 컴포넌트 최상단(useEffect 외부) 또는 useEffect 내부에 선언해도 됩니다.
+let progressTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+// progress 메시지 타임아웃 초기화 함수
+const resetProgressTimeout = () => {
+  if (progressTimeoutId) clearTimeout(progressTimeoutId);
+  progressTimeoutId = setTimeout(() => {
+    console.log("[타임아웃] 5분간 progress 메시지 없음 -> 시퀀스 종료 처리");
+    handleSequenceCompletion(currentSequenceIndex, 'completed', 'progress 타임아웃 종료');
+  }, 5 * 60 * 1000); // 5분
+};
+
+// MQTT 메시지 수신 핸들러
+const onMqttMessageArrived = (topic: string, message: Buffer) => {
+  const messageStr = message.toString();
+
+  // 1. 추출 결과 출력 토픽에서 '공정 종료' 감지
+  if (topic === EXTRACTION_OUTPUT_TOPIC && messageStr.includes("공정 종료")) {
+    console.log("[공정 종료] output 토픽에서 '공정 종료' 메시지 수신");
+    handleSequenceCompletion(currentSequenceIndex, 'completed', 'output 기반 종료');
+    return;
+  }
+
+  // 2. progress 토픽에서 완료 관련 키워드 감지
+  if (
+    topic === PROCESS_PROGRESS_TOPIC &&
+    ["완료", "종료", "완전 종료"].some(keyword => messageStr.includes(keyword))
+  ) {
+    console.log("[완료 감지] progress 토픽에서 완료 관련 메시지 수신");
+    handleSequenceCompletion(currentSequenceIndex, 'completed', 'progress 메시지 기반 완료');
+    return;
+  }
+
+  // 3. progress 수신 시 타이머 갱신
+  if (topic === PROCESS_PROGRESS_TOPIC) {
+    resetProgressTimeout();
+  }
+
+  // 4. JSON 데이터 처리 (시퀀스 완료 감지)
+  try {
+    const data = JSON.parse(messageStr);
+
+    if (data && status === 'running' && currentSequenceIndex >= 0) {
+      const currentSeq = selectedSequences[currentSequenceIndex];
+
+      // 완료 상태 감지
+      if (data.process_info?.includes("완료") && currentSeq?.status === 'running') {
+        console.log(`프로세스 완료 상태 감지: ${data.process_info}`);
+        addLog(`시퀀스 ${currentSequenceIndex + 1} 완료됨: ${currentSeq.sequence.name} (${data.process_info})`, true);
+        handleSequenceCompletion(currentSequenceIndex, 'completed', '진행 상태 완료');
+      }
+
+      // 오류 상태 감지
+      else if (data.process_info?.includes("오류") && currentSeq?.status === 'running') {
+        console.log(`프로세스 오류 상태 감지: ${data.process_info}`);
+        addLog(`시퀀스 ${currentSequenceIndex + 1} 오류 발생: ${currentSeq.sequence.name} (${data.process_info})`, true);
+        handleSequenceCompletion(currentSequenceIndex, 'error', `진행 상태 오류: ${data.process_info}`);
+      }
+
+      // 남은 시간이 0초인 경우 완료 처리
+      if (data.remaining_time === "0s" && currentSeq?.status === 'running') {
+        console.log(`남은 시간이 0초인 상태 감지, 작업 완료 처리`);
+        addLog(`시퀀스 ${currentSequenceIndex + 1} 남은 시간 0초, 완료 처리: ${currentSeq.sequence.name}`, true);
+        handleSequenceCompletion(currentSequenceIndex, 'completed', '남은 시간 0초');
+      }
+    }
+  } catch (error) {
+    // JSON 파싱 실패해도 무시 (텍스트 메시지일 수 있음)
+    // console.debug('진행 상태 메시지 JSON 파싱 실패 (텍스트 메시지일 수 있음):', error);
+   }
+ };
+}
+
+
+
         
         // 큐 상태 토픽 처리
         if (topic === QUEUE_STATUS_TOPIC) {
