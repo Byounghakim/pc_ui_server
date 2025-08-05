@@ -750,11 +750,7 @@ const AutomationProcess: React.FC<AutomationProcessProps> = ({
 
           
 
-        
-// ✅ 여기가 적절한 위치입니다!
-if (topic === PROCESS_PROGRESS_TOPIC) {
-  resetProgressTimeout();
-}
+
 
 
 
@@ -772,6 +768,18 @@ const resetProgressTimeout = () => {
     handleSequenceCompletion(currentSequenceIndex, 'completed', 'progress 타임아웃 종료');
   }, 5 * 60 * 1000); // 5분
 };
+
+
+        
+// ✅ 여기가 적절한 위치입니다!
+if (topic === PROCESS_PROGRESS_TOPIC) {
+  resetProgressTimeout();
+}
+
+
+
+
+
 
 // MQTT 메시지 수신 핸들러
 const onMqttMessageArrived = (topic: string, message: Buffer) => {

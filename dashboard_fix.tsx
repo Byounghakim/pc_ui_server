@@ -268,7 +268,8 @@ export default function Dashboard() {
   const [camStates, setCamStates] = useState<Array<"ON" | "OFF">>(Array(5).fill("OFF"))
   const [lightStates, setLightStates] = useState<Array<"ON" | "OFF">>(Array(5).fill("OFF"))
   const [camStateMessages, setCamStateMessages] = useState<{[key: number]: string}>({})
-  // 추가: 자동화 공정 잠금 상태
+  
+  // 추가: 🔒 자동화 잠금 상태 관리
   const [isAutomationLocked, setIsAutomationLocked] = useState<boolean>(false)
   // 추가: 현재 활성화된 탭
   const [activeTab, setActiveTab] = useState<string>("tanks")
@@ -292,17 +293,71 @@ export default function Dashboard() {
   const setAutomationLock = (locked: boolean) => {
     setIsAutomationLocked(locked);
     
-    // 자동화 시작 시 자동화 탭으로 이동
-    if (locked && activeTab !== "automation") {
-      setActiveTab("automation");
-      
-      addProgressMessage({
-        timestamp: Date.now(),
-        message: "자동화 공정 시작: 다른 탭으로 이동하더라도 공정은 계속 진행됩니다.",
-        rawJson: null
+    if (locked) {
+      // 자동화 시작 시 자동화 탭으로 이동
+      if (activeTab !== "automation") {
+        setActiveTab("automation");
+
+        addProgressMessage({
+         timestamp: Date.now(),
+         message: "자동화 공정 시작: 다른 탭으로 이동하더라도 공정은 계속 진행됩니다.",
+         rawJson: null
       });
     }
-  };
+  } else {
+    // 자동화 종료 시 메시지 출력
+    addProgressMessage({
+      timestamp: Date.now(),
+      message: "자동화 공정이 완료되었습니다. 이제 새로운 자동화를 시작할 수 있습니다.",
+      rawJson: null
+    });
+
+    console.log("✅ 자동화 종료됨 - 잠금 해제 완료");
+  }
+};
+
+// ✅ 자동화 시작 함수
+const startAutomation = async () => {
+  if (isAutomationLocked) {
+    console.log("자동화가 진행 중입니다. 새로운 자동화를 시작할 수 없습니다.");
+    return;
+  }
+
+  // 1. 자동화 시작 - 잠금 설정
+  setAutomationLock(true);
+
+  try {
+    console.log("🔄 자동화 공정 시작됨");
+
+    // 2. 실제 자동화 시퀀스 실행
+    await runAutomationSequences(); // 이 부분은 실제 실행 함수로 교체하세요
+
+    // 3. 자동화 정상 종료 시 잠금 해제
+    setAutomationLock(false);
+  } catch (error) {
+    console.error("❌ 자동화 실행 중 오류 발생:", error);
+
+    // 4. 예외 발생 시도 잠금 해제
+    setAutomationLock(false);
+
+    addProgressMessage({
+      timestamp: Date.now(),
+      message: "자동화 공정 중 오류가 발생했습니다. 다시 시도해주세요.",
+      rawJson: null
+    });
+  }
+};
+
+// ✅ 예시: 자동화 실행 함수
+const runAutomationSequences = async () => {
+  // 여기에 실제 자동화 로직을 구현하세요
+  // 예: 각 시퀀스를 반복, MQTT 전송 등
+
+  // 시뮬레이션: 3초 대기
+  await new Promise(resolve => setTimeout(resolve, 3000));
+};
+
+
   
   const [tankData, setTankData] = useState<TankSystemDataWithMessages>({
     mainTank: {

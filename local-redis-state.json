@@ -1,5 +1,4 @@
 {
-  "automation:processes": "{\"processes\":[]}",
   "system:state": {
     "valve": {
       "state": "0000",
@@ -87,52 +86,23 @@
         }
       }
     },
-    "timestamp": 1746205101973,
+    "timestamp": 1754394556966,
     "fromCache": true,
-    "valveState": "0100",
+    "valveState": "0000",
     "valveADesc": "전체순환_교환",
-    "valveBDesc": "열림",
-    "valveStatusMessage": "현재 밸브 상태: valveA=OFF(전체순환_교환), valveB=ON(열림), valveC=OFF(-), valveD=OFF(-)"
+    "valveBDesc": "닫힘",
+    "valveStatusMessage": "현재 밸브 상태: valveA=OFF(전체순환_교환), valveB=OFF(닫힘), valveC=OFF(-), valveD=OFF(-)",
+    "tankMessages": {
+      "1": "비어있음(5%미만) (오후 11:01)",
+      "2": "수위부족 (오전 12:04)",
+      "3": "수위부족 (오전 12:08)",
+      "4": "수위부족 (오전 12:14)",
+      "6": "수위부족 (오전 1:04:00)"
+    }
   },
   "sequences": [
     {
-      "name": "이동1(본탱크-순환탱크6)",
-      "operation_mode": 22,
-      "repeats": 1,
-      "process": [
-        60,
-        5,
-        11,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      "selectedPumps": [
-        true,
-        false,
-        false,
-        false,
-        false,
-        false
-      ],
-      "individualRepeats": {
-        "0": 11
-      }
-    },
-    {
-      "name": "이동1(본탱크-순환탱크6)",
+      "name": "1_풀세척(2-6, 1-6, 1-6, 2-m)",
       "operation_mode": 21,
       "repeats": 1,
       "process": [
@@ -140,20 +110,20 @@
         0,
         0,
         60,
-        5,
-        12,
+        10,
+        8,
         60,
-        5,
-        12,
+        10,
+        8,
         60,
-        5,
-        12,
+        10,
+        8,
         60,
-        5,
-        12,
+        10,
+        8,
         60,
-        5,
-        12
+        30,
+        0
       ],
       "selectedPumps": [
         false,
@@ -164,16 +134,809 @@
         true
       ],
       "individualRepeats": {
-        "1": 12,
-        "2": 12,
-        "3": 12,
-        "4": 12,
-        "5": 12
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8
       }
     },
     {
-      "name": "밀기",
+      "name": "1_풀세척(2-6, 1-6, 1-6, 2-m)",
+      "operation_mode": 21,
+      "repeats": 2,
+      "process": [
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 8,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      }
+    },
+    {
+      "name": "1_풀세척(2-6, 1-6, 1-6, 2-m)",
       "operation_mode": 13,
+      "repeats": 2,
+      "process": [
+        0,
+        180,
+        180,
+        180,
+        180,
+        180
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "wait_time": 20
+    },
+    {
+      "name": "1.1..풀세척(2-6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 13,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      }
+    },
+    {
+      "name": "1.2.풀세척(1-6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 13,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      }
+    },
+    {
+      "name": "1.3.풀세척(1-6)전체",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8,
+        60,
+        10,
+        8
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 8,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      }
+    },
+    {
+      "name": "1.4.풀세척(2-6-M)",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        120,
+        125,
+        130,
+        135,
+        140
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 13,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      },
+      "wait_time": 10
+    },
+    {
+      "name": "1.5.풀세척(3-6-M)",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        120,
+        120,
+        120,
+        120
+      ],
+      "selectedPumps": [
+        false,
+        false,
+        true,
+        true,
+        true,
+        true
+      ],
+      "wait_time": 10
+    },
+    {
+      "name": "1.6.풀세척_밀기(2-6)",
+      "operation_mode": 11,
+      "repeats": 1,
+      "process": [
+        0,
+        60,
+        65,
+        70,
+        75,
+        75
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "wait_time": 10
+    },
+    {
+      "name": "2_워싱(물순환_2-6-M)_A",
+      "operation_mode": 31,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        420,
+        60,
+        300,
+        60,
+        300,
+        60,
+        300,
+        60,
+        300,
+        60
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "2_워싱(물순환_2-6-M)_A",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        0,
+        60,
+        120
+      ],
+      "selectedPumps": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true
+      ],
+      "wait_time": 5
+    },
+    {
+      "name": "2.1._워싱(wet순환-본탱크)8-2m, 5-7m",
+      "operation_mode": 31,
+      "repeats": 2,
+      "process": [
+        480,
+        120,
+        480,
+        120,
+        300,
+        120,
+        300,
+        120,
+        300,
+        120,
+        300,
+        60
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "2.1._워싱(wet순환-본탱크)8-2m, 5-7m",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        300,
+        330,
+        360,
+        390,
+        420
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "wait_time": 5
+    },
+    {
+      "name": "4.1.알콜추출_전체순환(1/0.5M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        60,
+        30,
+        6,
+        60,
+        30,
+        6,
+        60,
+        30,
+        6,
+        60,
+        30,
+        6,
+        60,
+        30,
+        6,
+        60,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.2.알콜추출_전체순환(1/0.5M*8)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        60,
+        30,
+        8,
+        60,
+        30,
+        8,
+        60,
+        30,
+        8,
+        60,
+        30,
+        8,
+        60,
+        30,
+        8,
+        60,
+        30,
+        8
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 8,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      }
+    },
+    {
+      "name": "4.3.알콜추출_전체순환(1/0.5M*7)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        60,
+        30,
+        7,
+        60,
+        30,
+        7,
+        60,
+        30,
+        7,
+        60,
+        30,
+        7,
+        60,
+        30,
+        7,
+        60,
+        30,
+        7
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 7,
+        "1": 7,
+        "2": 7,
+        "3": 7,
+        "4": 7,
+        "5": 7
+      }
+    },
+    {
+      "name": "4.4.알콜추출_전체순환(1/0.5M*10)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        60,
+        30,
+        10,
+        60,
+        30,
+        10,
+        60,
+        30,
+        10,
+        60,
+        30,
+        10,
+        60,
+        30,
+        10,
+        60,
+        30,
+        10
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 10,
+        "1": 10,
+        "2": 10,
+        "3": 10,
+        "4": 10,
+        "5": 10
+      }
+    },
+    {
+      "name": "4.5.알콜추출_전체순환(70/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        70,
+        30,
+        6,
+        70,
+        30,
+        5,
+        70,
+        30,
+        6,
+        70,
+        30,
+        6,
+        70,
+        30,
+        6,
+        70,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 5,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.6.알콜추출_전체순환(75/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        75,
+        30,
+        6,
+        75,
+        30,
+        6,
+        75,
+        30,
+        6,
+        75,
+        30,
+        6,
+        75,
+        30,
+        6,
+        75,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.7.알콜추출_전체순환(80/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.8.알콜추출_전체순환(85/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        85,
+        30,
+        6,
+        85,
+        30,
+        6,
+        85,
+        30,
+        6,
+        85,
+        30,
+        6,
+        85,
+        30,
+        6,
+        85,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.9.알콜추출_전체순환(90/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.10.알콜추출_전체순환(2-M, 80/30M*6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "4.11.알콜추출_전체순환_본탱크중첩밀기(2-6-, 3/1M)",
+      "operation_mode": 32,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "4.12.알콜추출_본탱크밀기(1-M, 1M)",
+      "operation_mode": 12,
       "repeats": 1,
       "process": [
         0,
@@ -191,51 +954,10 @@
         true,
         true
       ],
-      "wait_time": 60
+      "wait_time": 5
     },
     {
-      "name": "추출3(1-본탱크)1/0.5m",
-      "operation_mode": 22,
-      "repeats": 1,
-      "process": [
-        60,
-        30,
-        8,
-        60,
-        30,
-        7,
-        60,
-        30,
-        7,
-        60,
-        30,
-        7,
-        60,
-        30,
-        7,
-        60,
-        30,
-        8
-      ],
-      "selectedPumps": [
-        true,
-        true,
-        true,
-        true,
-        true,
-        true
-      ],
-      "individualRepeats": {
-        "0": 8,
-        "1": 7,
-        "2": 7,
-        "3": 7,
-        "4": 7,
-        "5": 8
-      }
-    },
-    {
-      "name": "추출1(1/0.5m*6)",
+      "name": "5.1.알콜추출(1-6, 60/30s*6)",
       "operation_mode": 21,
       "repeats": 1,
       "process": [
@@ -276,22 +998,28 @@
       }
     },
     {
-      "name": "자동화 테스트",
-      "operation_mode": 33,
+      "name": "5.1.2.알콜추출(1-6, 70/30s*6)",
+      "operation_mode": 21,
       "repeats": 1,
       "process": [
+        70,
         30,
-        5,
+        6,
+        70,
         30,
-        5,
+        6,
+        70,
         30,
-        5,
+        6,
+        70,
         30,
-        5,
+        6,
+        70,
         30,
-        5,
+        6,
+        70,
         30,
-        5
+        6
       ],
       "selectedPumps": [
         true,
@@ -300,7 +1028,587 @@
         true,
         true,
         true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "5.1.3.알콜추출(1-6, 80/30s*6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "5.2.1.알콜추출(2-6, 80/30s*6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6,
+        80,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "5.2.2.알콜추출(2-6, 90/30s*6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      }
+    },
+    {
+      "name": "5.3.알콜추출_추출순환_본탱크중첩밀기(2-6, 3/1M)",
+      "operation_mode": 31,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
       ]
+    },
+    {
+      "name": "5.4.알콜추출_밀기(2-6, 1M)",
+      "operation_mode": 11,
+      "repeats": 1,
+      "process": [
+        0,
+        60,
+        65,
+        70,
+        75,
+        75
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 8,
+        "1": 8,
+        "2": 8,
+        "3": 8,
+        "4": 8,
+        "5": 8
+      },
+      "wait_time": 5
+    },
+    {
+      "name": "6.1.이동_M-1(90/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        90,
+        30,
+        6,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6
+      }
+    },
+    {
+      "name": "6.2.이동_2T-5T(90/30M*6)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        90,
+        30,
+        6,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        false
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6
+      }
+    },
+    {
+      "name": "6.3.이동_6T-1T(90/30M*6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        90,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "7.1.본탱크모임_중첩(2-6, 3/1M)",
+      "operation_mode": 33,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60,
+        180,
+        60,
+        180,
+        30
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "7.2.본탱크모임_동시(2-6, 1M)",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        60,
+        65,
+        70,
+        75,
+        80
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "wait_time": 5
+    },
+    {
+      "name": "0.본탱크모임(2-M, 60/10s)",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        60,
+        60,
+        60,
+        60,
+        60
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "individualRepeats": {
+        "0": 6,
+        "1": 6,
+        "2": 6,
+        "3": 6,
+        "4": 6,
+        "5": 6
+      },
+      "wait_time": 10
+    },
+    {
+      "name": "라인세척(물길변경_전체순환)",
+      "operation_mode": 12,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "wait_time": 20
+    },
+    {
+      "name": "라인세척(main-1, 6min)",
+      "operation_mode": 22,
+      "repeats": 1,
+      "process": [
+        360,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "name": "라인세척(물길변경_추출순환_1_10s)",
+      "operation_mode": 11,
+      "repeats": 1,
+      "process": [
+        10,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        true,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "wait_time": 10
+    },
+    {
+      "name": "라인세척A(2-6)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        300,
+        30,
+        0,
+        300,
+        30,
+        0,
+        300,
+        30,
+        0,
+        300,
+        30,
+        0,
+        300,
+        30,
+        0
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "라인세척B(2-5, 6m)",
+      "operation_mode": 21,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        360,
+        0,
+        0,
+        360,
+        0,
+        0,
+        360,
+        0,
+        0,
+        360,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        false
+      ]
+    },
+    {
+      "name": "라인세척(main-투입)",
+      "operation_mode": 13,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "selectedPumps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "wait_time": 20
+    },
+    {
+      "name": "라인세척B(6-main)",
+      "operation_mode": 23,
+      "repeats": 1,
+      "process": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        120,
+        30,
+        3
+      ],
+      "selectedPumps": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        true
+      ],
+      "individualRepeats": {
+        "5": 3
+      }
     }
-  ]
+  ],
+  "automation:processes": "{\"processes\":[{\"name\":\"순환청소\",\"sequences\":[{\"id\":\"f591fe85-92ba-477e-8374-cc9ac317274b\",\"sequence\":{\"name\":\"라인세척(물길변경_전체순환)\",\"operation_mode\":12,\"repeats\":1,\"process\":[0,0,0,0,0,0],\"selectedPumps\":[false,false,false,false,false,false],\"wait_time\":20},\"status\":\"waiting\",\"waitTime\":30,\"customRepeats\":1,\"currentRepeatCount\":10,\"process\":[],\"updatedAt\":\"2025-08-05T06:12:15.595Z\"},{\"id\":\"0def7735-2bd6-4d3f-ba3c-ed5baad9bddb\",\"sequence\":{\"name\":\"라인세척(main-1, 6min)\",\"operation_mode\":22,\"repeats\":1,\"process\":[360,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],\"selectedPumps\":[true,false,false,false,false,false]},\"status\":\"waiting\",\"waitTime\":0,\"customRepeats\":1,\"currentRepeatCount\":9,\"process\":[],\"updatedAt\":\"2025-08-05T06:12:15.595Z\"},{\"id\":\"e83d159b-3cd8-496e-aeb4-5d30f86a14e2\",\"sequence\":{\"name\":\"라인세척(물길변경_추출순환_1_10s)\",\"operation_mode\":11,\"repeats\":1,\"process\":[10,0,0,0,0,0],\"selectedPumps\":[true,false,false,false,false,false],\"wait_time\":10},\"status\":\"waiting\",\"waitTime\":0,\"customRepeats\":1,\"currentRepeatCount\":9,\"process\":[],\"updatedAt\":\"2025-08-05T06:12:15.595Z\"},{\"id\":\"761e6f8a-f3a8-4dda-9684-99329df34609\",\"sequence\":{\"name\":\"라인세척(2-6)\",\"operation_mode\":21,\"repeats\":1,\"process\":[0,0,0,300,30,0,300,30,0,300,30,0,300,30,0,300,30,0],\"selectedPumps\":[false,true,true,true,true,true]},\"status\":\"waiting\",\"waitTime\":30,\"customRepeats\":1,\"currentRepeatCount\":9,\"process\":[],\"updatedAt\":\"2025-08-05T06:12:15.595Z\"},{\"id\":\"5e87f9b2-f38b-4be6-8be8-ddf0b30fcff7\",\"sequence\":{\"name\":\"라인세척(main-투입)\",\"operation_mode\":13,\"repeats\":1,\"process\":[0,0,0,0,0,0],\"selectedPumps\":[false,false,false,false,false,false],\"wait_time\":20},\"status\":\"waiting\",\"waitTime\":0,\"customRepeats\":1,\"currentRepeatCount\":9,\"process\":[],\"updatedAt\":\"2025-08-05T06:12:15.595Z\"}],\"id\":\"49f9b8a1-ef46-4fe2-a709-25649abe6c9c\",\"updatedAt\":\"2025-08-05T06:12:15.596Z\",\"createdAt\":\"2025-08-05T06:12:15.450Z\"}]}"
 }
